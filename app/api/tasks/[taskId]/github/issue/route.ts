@@ -24,7 +24,7 @@ interface RouteContext {
 export async function POST(_request: Request, context: RouteContext) {
   try {
     const { taskId } = await context.params;
-    const contextData = withLoopBoardRepository((repository) => {
+    const contextData = await withLoopBoardRepository((repository) => {
       const task = repository.getTask(taskId);
       const project = repository.getProject(task.projectId);
       const automationSettings = repository.getAutomationSettings();
@@ -87,7 +87,7 @@ export async function POST(_request: Request, context: RouteContext) {
       return jsonError(result.message, status, `github_issue_${result.status}`);
     }
 
-    const task = withLoopBoardRepository((repository) =>
+    const task = await withLoopBoardRepository((repository) =>
       repository.linkGitHubIssue(taskId, {
         issueNumber: result.issueNumber!,
         issueUrl: result.issueUrl!,

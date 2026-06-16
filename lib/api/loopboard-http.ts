@@ -78,26 +78,17 @@ export const handleApiError = (error: unknown) => {
   return jsonError("LoopBoard could not complete the request.");
 };
 
-export const withLoopBoardRepository = <T>(
+export const withLoopBoardRepository = async <T>(
   operation: (repository: LoopBoardRepository) => T | Promise<T>,
-): T | Promise<T> => {
+): Promise<T> => {
   const database = openLoopBoardDatabase();
   applyMigrations(database);
   const repository = new LoopBoardRepository(database);
 
   try {
-    const result = operation(repository);
-    if (result instanceof Promise) {
-      return result.finally(() => {
-        database.close();
-      });
-    }
-
+    return await operation(repository);
+  } finally {
     database.close();
-    return result;
-  } catch (error) {
-    database.close();
-    throw error;
   }
 };
 

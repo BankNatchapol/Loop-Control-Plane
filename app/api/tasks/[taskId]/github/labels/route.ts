@@ -34,7 +34,7 @@ export async function POST(request: Request, context: RouteContext) {
   try {
     const { taskId } = await context.params;
     const input = (await readJsonBody(request)) as SyncLabelsBody;
-    const contextData = withLoopBoardRepository((repository) => {
+    const contextData = await withLoopBoardRepository((repository) => {
       const task = repository.getTask(taskId);
       const project = repository.getProject(task.projectId);
 
@@ -101,7 +101,7 @@ export async function POST(request: Request, context: RouteContext) {
       return jsonError(result.message, status, `github_labels_${result.status}`);
     }
 
-    const task = withLoopBoardRepository((repository) =>
+    const task = await withLoopBoardRepository((repository) =>
       repository.syncTaskGitHubIssueLabels(taskId, {
         issueLabels: result.labels,
         syncedAt: result.syncedAt,

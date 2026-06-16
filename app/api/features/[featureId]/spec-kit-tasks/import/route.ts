@@ -21,7 +21,7 @@ export async function POST(request: Request, context: RouteContext) {
   try {
     const { featureId } = await context.params;
     const body = (await readJsonBody(request)) as SpecKitImportInput;
-    const result = withLoopBoardRepository((repository) =>
+    const result = await withLoopBoardRepository((repository) =>
       new SpecKitTaskImporter(repository).importFeature(featureId, body),
     );
 

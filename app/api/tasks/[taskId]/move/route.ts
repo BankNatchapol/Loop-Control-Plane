@@ -24,7 +24,7 @@ export async function POST(request: Request, context: RouteContext) {
   try {
     const { taskId } = await context.params;
     const input = (await readJsonBody(request)) as MoveTaskBody;
-    const task = withLoopBoardRepository((repository) =>
+    const task = await withLoopBoardRepository((repository) =>
       repository.moveTask(taskId, input.toStatus as KanbanStatus, input.actor),
     );
     syncExistingTaskEventsFile(task);

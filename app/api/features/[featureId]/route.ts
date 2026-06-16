@@ -49,7 +49,7 @@ const buildFeatureUpdate = (
 export async function GET(_request: Request, context: RouteContext) {
   try {
     const { featureId } = await context.params;
-    const feature = withLoopBoardRepository((repository) => {
+    const feature = await withLoopBoardRepository((repository) => {
       const persistedFeature = repository.getFeature(featureId);
       const project = repository.getProject(persistedFeature.projectId);
 
@@ -66,7 +66,7 @@ export async function PATCH(request: Request, context: RouteContext) {
   try {
     const { featureId } = await context.params;
     const body = await readJsonBody(request);
-    const feature = withLoopBoardRepository((repository) => {
+    const feature = await withLoopBoardRepository((repository) => {
       const current = repository.getFeature(featureId);
       const input = buildFeatureUpdate(body, current, (projectId) =>
         repository.getProject(projectId),
@@ -84,7 +84,7 @@ export async function PATCH(request: Request, context: RouteContext) {
 export async function DELETE(_request: Request, context: RouteContext) {
   try {
     const { featureId } = await context.params;
-    withLoopBoardRepository((repository) => repository.deleteFeature(featureId));
+    await withLoopBoardRepository((repository) => repository.deleteFeature(featureId));
 
     return jsonOk({ featureId });
   } catch (error) {

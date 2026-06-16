@@ -16,7 +16,7 @@ export async function POST(
     const { workflowId } = await params;
     const body = await readJsonBody(request);
     const input = body && typeof body === "object" && !Array.isArray(body) ? body : {};
-    const result = withLoopBoardRepository((repository) =>
+    const result = await withLoopBoardRepository((repository) =>
       exportRepositoryWorkflowFile({
         repository,
         workflowId,

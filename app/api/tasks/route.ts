@@ -12,7 +12,7 @@ export const runtime = "nodejs";
 export async function POST(request: Request) {
   try {
     const input = (await readJsonBody(request)) as CreateTaskInput;
-    const task = withLoopBoardRepository((repository) =>
+    const task = await withLoopBoardRepository((repository) =>
       repository.createTask(input),
     );
     syncExistingTaskEventsFile(task);

@@ -9,11 +9,11 @@ import {
 
 export const runtime = "nodejs";
 
-export function GET(request: Request) {
+export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const projectId = url.searchParams.get("projectId") ?? undefined;
-    const status = withLoopBoardRepository((repository) =>
+    const status = await withLoopBoardRepository((repository) =>
       getEngineStatus(repository, { projectId }),
     );
 

@@ -16,7 +16,7 @@ interface RouteContext {
 export async function POST(_request: Request, context: RouteContext) {
   try {
     const { featureId } = await context.params;
-    const preview = withLoopBoardRepository((repository) =>
+    const preview = await withLoopBoardRepository((repository) =>
       new SpecKitTaskImporter(repository).previewFeature(featureId),
     );
 

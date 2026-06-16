@@ -46,16 +46,16 @@ export async function POST(request: Request, context: RouteContext) {
       return jsonError("Task action is not supported.", 400, "validation_error");
     }
 
-    const task = withLoopBoardRepository((repository) =>
+    const task = await withLoopBoardRepository((repository) =>
       repository.applyTaskAction(taskId, input.action as TaskAction),
     );
     if (input.action === "claim-human") {
-      withLoopBoardRepository((repository) =>
+      await withLoopBoardRepository((repository) =>
         refreshTaskHandoff(repository, taskId),
       );
     }
     if (input.action === "return-ai") {
-      withLoopBoardRepository((repository) =>
+      await withLoopBoardRepository((repository) =>
         appendTaskHandoffNote(
           repository,
           taskId,

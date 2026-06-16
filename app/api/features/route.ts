@@ -49,11 +49,11 @@ const buildFeatureInput = (
   };
 };
 
-export function GET(request: Request) {
+export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const projectId = url.searchParams.get("projectId") ?? undefined;
-    const features = withLoopBoardRepository((repository) => {
+    const features = await withLoopBoardRepository((repository) => {
       const projects = projectId ? [repository.getProject(projectId)] : repository.listProjects();
 
       return refreshBoardFeatureArtifacts({
@@ -71,7 +71,7 @@ export function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const body = await readJsonBody(request);
-    const feature = withLoopBoardRepository((repository) => {
+    const feature = await withLoopBoardRepository((repository) => {
       const input = buildFeatureInput(body, (projectId) =>
         repository.getProject(projectId),
       );

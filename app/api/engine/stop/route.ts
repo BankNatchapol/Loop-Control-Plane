@@ -7,9 +7,9 @@ import {
 
 export const runtime = "nodejs";
 
-export function POST() {
+export async function POST() {
   try {
-    const result = withLoopBoardRepository((repository) =>
+    const result = await withLoopBoardRepository((repository) =>
       stopEngineScheduler(repository),
     );
 

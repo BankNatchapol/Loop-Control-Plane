@@ -19,7 +19,7 @@ export async function POST(request: Request, context: RouteContext) {
   try {
     const { taskId } = await context.params;
     const input = (await readJsonBody(request)) as AppendTaskEventInput;
-    const task = withLoopBoardRepository((repository) =>
+    const task = await withLoopBoardRepository((repository) =>
       repository.appendTaskEvent(taskId, input),
     );
     syncExistingTaskEventsFile(task);

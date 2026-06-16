@@ -22,7 +22,7 @@ export async function POST(
     }
 
     const input = body as { featureId?: unknown; inputArtifacts?: unknown };
-    const run = withLoopBoardRepository((repository) =>
+    const run = await withLoopBoardRepository((repository) =>
       startWorkflowRun({
         repository,
         input: {

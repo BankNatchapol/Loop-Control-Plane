@@ -27,7 +27,7 @@ export async function POST(
     }
     const path = input.path;
 
-    const result = withLoopBoardRepository((repository) =>
+    const result = await withLoopBoardRepository((repository) =>
       importRepositoryWorkflowFile({
         repository,
         projectId,

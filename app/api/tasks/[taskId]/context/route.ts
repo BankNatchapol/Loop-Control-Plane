@@ -36,7 +36,7 @@ interface TaskContextBody {
 export async function GET(_request: Request, context: RouteContext) {
   try {
     const { taskId } = await context.params;
-    const result = withLoopBoardRepository((repository) =>
+    const result = await withLoopBoardRepository((repository) =>
       getTaskContextStatus(repository, taskId),
     );
 
@@ -52,7 +52,7 @@ export async function POST(request: Request, context: RouteContext) {
     const input = (await readJsonBody(request)) as TaskContextBody;
 
     if (input.action === "export-events") {
-      const result = withLoopBoardRepository((repository) =>
+      const result = await withLoopBoardRepository((repository) =>
         exportTaskEvents(repository, taskId),
       );
 
@@ -60,7 +60,7 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     if (input.action === "refresh-handoff") {
-      const result = withLoopBoardRepository((repository) =>
+      const result = await withLoopBoardRepository((repository) =>
         refreshTaskHandoff(repository, taskId),
       );
 
@@ -68,7 +68,7 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     if (input.action === "read-handoff") {
-      const result = withLoopBoardRepository((repository) =>
+      const result = await withLoopBoardRepository((repository) =>
         readTaskHandoff(repository, taskId),
       );
 
@@ -80,7 +80,7 @@ export async function POST(request: Request, context: RouteContext) {
         return jsonError("handoff.md content is required.", 400, "validation_error");
       }
 
-      const result = withLoopBoardRepository((repository) =>
+      const result = await withLoopBoardRepository((repository) =>
         saveTaskHandoff(repository, taskId, input.content ?? ""),
       );
 
@@ -88,7 +88,7 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     if (input.action === "generate-claude-prompt") {
-      const result = withLoopBoardRepository((repository) =>
+      const result = await withLoopBoardRepository((repository) =>
         generateTaskClaudeCodePrompt(
           repository,
           taskId,

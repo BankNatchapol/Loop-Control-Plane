@@ -18,7 +18,7 @@ interface RouteContext {
 export async function GET(_request: Request, context: RouteContext) {
   try {
     const { taskId } = await context.params;
-    const task = withLoopBoardRepository((repository) =>
+    const task = await withLoopBoardRepository((repository) =>
       repository.getTask(taskId),
     );
 
@@ -32,7 +32,7 @@ export async function PATCH(request: Request, context: RouteContext) {
   try {
     const { taskId } = await context.params;
     const input = (await readJsonBody(request)) as UpdateTaskInput;
-    const task = withLoopBoardRepository((repository) =>
+    const task = await withLoopBoardRepository((repository) =>
       repository.updateTask(taskId, input),
     );
     syncExistingTaskEventsFile(task);

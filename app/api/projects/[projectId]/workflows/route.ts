@@ -47,7 +47,7 @@ export async function GET(
 ) {
   try {
     const { projectId } = await params;
-    const workflows = withLoopBoardRepository((repository) =>
+    const workflows = await withLoopBoardRepository((repository) =>
       repository.listWorkflows(projectId),
     );
 
@@ -64,7 +64,7 @@ export async function POST(
   try {
     const { projectId } = await params;
     const input = buildCreateWorkflowInput(projectId, await readJsonBody(request));
-    const workflow = withLoopBoardRepository((repository) =>
+    const workflow = await withLoopBoardRepository((repository) =>
       repository.createWorkflow(input),
     );
 

@@ -14,7 +14,7 @@ export const runtime = "nodejs";
 export async function POST(request: Request) {
   try {
     const projectId = readEngineProjectId(await readJsonBody(request));
-    const result = withLoopBoardRepository((repository) =>
+    const result = await withLoopBoardRepository((repository) =>
       enqueueDemoPingJob(repository, projectId),
     );
 

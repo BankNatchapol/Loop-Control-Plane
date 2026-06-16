@@ -41,7 +41,7 @@ export async function GET(
 ) {
   try {
     const { workflowId } = await params;
-    const workflow = withLoopBoardRepository((repository) =>
+    const workflow = await withLoopBoardRepository((repository) =>
       repository.getWorkflow(workflowId),
     );
 
@@ -58,7 +58,7 @@ export async function PATCH(
   try {
     const { workflowId } = await params;
     const input = buildUpdateWorkflowInput(await readJsonBody(request));
-    const workflow = withLoopBoardRepository((repository) =>
+    const workflow = await withLoopBoardRepository((repository) =>
       repository.updateWorkflow(workflowId, input),
     );
 

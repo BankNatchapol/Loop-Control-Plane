@@ -23,7 +23,7 @@ interface RouteContext {
 export async function GET(_request: Request, context: RouteContext) {
   try {
     const { featureId, artifactName } = await context.params;
-    const document = withLoopBoardRepository((repository) =>
+    const document = await withLoopBoardRepository((repository) =>
       readRepositoryFeatureArtifactDocument(
         repository,
         featureId,
@@ -51,7 +51,7 @@ export async function PUT(request: Request, context: RouteContext) {
       throw new ValidationError("Artifact content must be a string.");
     }
 
-    const document = withLoopBoardRepository((repository) =>
+    const document = await withLoopBoardRepository((repository) =>
       writeRepositoryFeatureArtifactDocument(
         repository,
         featureId,

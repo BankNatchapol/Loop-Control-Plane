@@ -25,7 +25,7 @@ export async function POST(request: Request, context: RouteContext) {
   try {
     const { taskId } = await context.params;
     const input = (await readJsonBody(request)) as SyncPullRequestBody;
-    const contextData = withLoopBoardRepository((repository) => {
+    const contextData = await withLoopBoardRepository((repository) => {
       const task = repository.getTask(taskId);
 
       return {
@@ -59,7 +59,7 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const task = result.github
-      ? withLoopBoardRepository((repository) =>
+      ? await withLoopBoardRepository((repository) =>
           repository.syncTaskGitHubPullRequest(taskId, {
             github: result.github!,
             syncedAt: result.syncedAt,

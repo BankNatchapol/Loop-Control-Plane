@@ -27,7 +27,7 @@ export async function POST(
   try {
     const { taskId } = await params;
     const action = readAction(await readJsonBody(request));
-    const result = withLoopBoardRepository((repository) => {
+    const result = await withLoopBoardRepository((repository) => {
       const task = repository.getTask(taskId);
       const project = repository.getProject(task.projectId);
 

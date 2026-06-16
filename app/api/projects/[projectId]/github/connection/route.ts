@@ -13,7 +13,7 @@ export async function GET(
 ) {
   try {
     const { projectId } = await params;
-    const project = withLoopBoardRepository((repository) =>
+    const project = await withLoopBoardRepository((repository) =>
       repository.getProject(projectId),
     );
     const result = await checkGitHubConnection({

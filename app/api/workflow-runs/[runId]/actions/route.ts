@@ -54,7 +54,7 @@ export async function POST(
         ? input.action
         : request.headers.get(workflowActionHeader) ?? actionSearchParam;
 
-    const run = withLoopBoardRepository((repository) => {
+    const run = await withLoopBoardRepository((repository) => {
       const currentRun = repository.getWorkflowRun(runId);
       const effectiveAction =
         typeof requestedAction === "string"

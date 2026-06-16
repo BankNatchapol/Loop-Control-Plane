@@ -30,9 +30,9 @@ const buildAutomationSettingsInput = (
   return settings;
 };
 
-export function GET() {
+export async function GET() {
   try {
-    const settings = withLoopBoardRepository((repository) =>
+    const settings = await withLoopBoardRepository((repository) =>
       repository.getAutomationSettings(),
     );
 
@@ -45,7 +45,7 @@ export function GET() {
 export async function PATCH(request: Request) {
   try {
     const input = buildAutomationSettingsInput(await readJsonBody(request));
-    const settings = withLoopBoardRepository((repository) =>
+    const settings = await withLoopBoardRepository((repository) =>
       repository.updateAutomationSettings(input),
     );
 

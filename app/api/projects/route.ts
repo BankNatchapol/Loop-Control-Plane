@@ -74,9 +74,9 @@ const buildProjectInput = (body: unknown): CreateProjectInput => {
   };
 };
 
-export function GET() {
+export async function GET() {
   try {
-    const projects = withLoopBoardRepository((repository) =>
+    const projects = await withLoopBoardRepository((repository) =>
       repository.listProjects(),
     );
 
@@ -89,7 +89,7 @@ export function GET() {
 export async function POST(request: Request) {
   try {
     const input = buildProjectInput(await readJsonBody(request));
-    const project = withLoopBoardRepository((repository) =>
+    const project = await withLoopBoardRepository((repository) =>
       repository.createProject(input),
     );
 

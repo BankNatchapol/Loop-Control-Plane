@@ -83,7 +83,7 @@ export async function PATCH(
   try {
     const { projectId } = await params;
     const input = buildProjectUpdate(await readJsonBody(request));
-    const project = withLoopBoardRepository((repository) =>
+    const project = await withLoopBoardRepository((repository) =>
       repository.updateProject(projectId, input),
     );
 
@@ -99,7 +99,7 @@ export async function DELETE(
 ) {
   try {
     const { projectId } = await params;
-    withLoopBoardRepository((repository) => repository.deleteProject(projectId));
+    await withLoopBoardRepository((repository) => repository.deleteProject(projectId));
 
     return jsonOk({ projectId });
   } catch (error) {

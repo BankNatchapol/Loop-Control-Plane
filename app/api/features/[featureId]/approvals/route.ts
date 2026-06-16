@@ -37,7 +37,7 @@ export async function POST(request: Request, context: RouteContext) {
     const { featureId } = await context.params;
     const body = await readJsonBody(request);
     const artifactName = readApprovalArtifactName(body);
-    const feature = withLoopBoardRepository((repository) =>
+    const feature = await withLoopBoardRepository((repository) =>
       repository.approveFeatureArtifact(featureId, {
         artifactName,
         actor: "human",
