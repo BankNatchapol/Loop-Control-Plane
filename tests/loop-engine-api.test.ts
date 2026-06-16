@@ -6,6 +6,8 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, it } from "node:test";
 
 import { GET as getBackendAvailability } from "@/app/api/engine/backends/availability/route";
+import { GET as getEngineJobDetail } from "@/app/api/engine/jobs/[jobId]/route";
+import { GET as listEngineJobs } from "@/app/api/engine/jobs/route";
 import { POST as postDemoJob } from "@/app/api/engine/demo-job/route";
 import { POST as postTaskLoopEnqueue } from "@/app/api/engine/task-loop/enqueue/route";
 import { POST as postTaskLoopScan } from "@/app/api/engine/task-loop/scan/route";
@@ -95,6 +97,8 @@ describe("Loop engine API routes", () => {
         queueCounts: { completed: number; queued: number };
         recentJobs: Array<{ id: string }>;
         automationPolicy: { kind: string };
+        activeJobCount: number;
+        metrics?: { completed: number };
       }>(response);
 
       assert.equal(response.status, 200);
@@ -105,7 +109,74 @@ describe("Loop engine API routes", () => {
         assert.equal(payload.data.queueCounts.completed, 1);
         assert.equal(payload.data.queueCounts.queued, 0);
         assert.equal(payload.data.recentJobs[0]?.id, "engine-job-seed-demo-ping");
+        assert.equal(payload.data.activeJobCount, 0);
+        assert.ok(payload.data.metrics);
+        assert.equal(payload.data.metrics?.completed, 1);
       }
+    });
+  });
+
+  it("lists and filters engine jobs from GET /api/engine/jobs", async () => {
+    await withEngineApiDatabase(async () => {
+      await postDemoJob(
+        new Request("http://localhost/api/engine/demo-job", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectId: seedProject.id }),
+        }),
+      );
+
+      const response = await listEngineJobs(
+        new Request(
+          `http://localhost/api/engine/jobs?projectId=${encodeURIComponent(seedProject.id)}&status=queued&backend=stub&limit=5`,
+        ),
+      );
+      const payload = await readApiJson<{
+        jobs: Array<{ id: string; status: string; backend: string }>;
+      }>(response);
+
+      assert.equal(response.status, 200);
+      assert.equal(payload.ok, true);
+      if (payload.ok) {
+        assert.equal(payload.data.jobs.length, 1);
+        assert.equal(payload.data.jobs[0]?.status, "queued");
+        assert.equal(payload.data.jobs[0]?.backend, "stub");
+      }
+    });
+  });
+
+  it("returns redacted job detail from GET /api/engine/jobs/[jobId]", async () => {
+    await withEngineApiDatabase(async () => {
+      const response = await getEngineJobDetail(
+        new Request("http://localhost/api/engine/jobs/engine-job-seed-demo-ping"),
+        { params: Promise.resolve({ jobId: "engine-job-seed-demo-ping" }) },
+      );
+      const payload = await readApiJson<{
+        id: string;
+        executionLogs: Array<{ message: string }>;
+        payloadSummary: Record<string, unknown>;
+      }>(response);
+
+      assert.equal(response.status, 200);
+      assert.equal(payload.ok, true);
+      if (payload.ok) {
+        assert.equal(payload.data.id, "engine-job-seed-demo-ping");
+        assert.ok(Array.isArray(payload.data.executionLogs));
+        assert.ok(payload.data.payloadSummary);
+      }
+    });
+  });
+
+  it("returns 404 for unknown engine job detail routes", async () => {
+    await withEngineApiDatabase(async () => {
+      const response = await getEngineJobDetail(
+        new Request("http://localhost/api/engine/jobs/missing-job"),
+        { params: Promise.resolve({ jobId: "missing-job" }) },
+      );
+      const payload = await readApiJson<unknown>(response);
+
+      assert.equal(response.status, 404);
+      assert.equal(payload.ok, false);
     });
   });
 

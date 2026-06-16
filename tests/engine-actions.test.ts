@@ -8,9 +8,12 @@ import { describe, it } from "node:test";
 import { applyMigrations } from "@/db/migrate";
 import { seedDatabase } from "@/db/seed";
 import {
+  buildEngineJobDetail,
   buildEngineQueueCounts,
   enqueueDemoPingJob,
+  getEngineJobDetail,
   getEngineStatus,
+  listEngineJobsForApi,
   startEngineScheduler,
   stopEngineScheduler,
   summarizeEngineJob,
@@ -49,8 +52,87 @@ describe("Loop engine API actions", () => {
       assert.equal(status.recentJobs[0]?.id, "engine-job-seed-demo-ping");
       assert.equal(status.queueCounts.completed, 1);
       assert.equal(status.queueCounts.queued, 0);
+      assert.equal(status.activeJobCount, 0);
+      assert.ok(status.metrics);
     });
   });
+
+  it("lists engine jobs with repository filters", () =>
+    withRepository((repository) => {
+      repository.createEngineJob({
+        id: "engine-job-filter-queued",
+        kind: "demo-ping",
+        backend: "stub",
+        projectId: seedProject.id,
+        status: "queued",
+        payload: { ping: true },
+      });
+
+      const listed = listEngineJobsForApi(repository, {
+        projectId: seedProject.id,
+        status: "queued",
+        backend: "stub",
+      });
+
+      assert.equal(listed.jobs.length, 1);
+      assert.equal(listed.jobs[0]?.id, "engine-job-filter-queued");
+    }));
+
+  it("returns redacted engine job detail with stdout and policy metadata", () =>
+    withRepository((repository) => {
+      const job = repository.createEngineJob({
+        id: "engine-job-detail",
+        kind: "task-run",
+        backend: "stub",
+        projectId: seedProject.id,
+        taskId: "task-local-persistence-reset",
+        payload: { note: "GITHUB_TOKEN=super-secret-value" },
+        executionLogs: [
+          {
+            timestamp: "2026-06-16T12:00:00.000Z",
+            level: "info",
+            message: "policy allow recorded",
+            metadata: { policyCode: "task_run_allowed", policyKind: "allow" },
+          },
+        ],
+        result: {
+          stdoutSummary: "GITHUB_TOKEN=hidden-output",
+          externalSessionId: "ao-session-123",
+        },
+      });
+
+      const detail = getEngineJobDetail(repository, job.id);
+
+      assert.match(JSON.stringify(detail.payloadSummary), /\[redacted\]/);
+      assert.match(detail.stdoutExcerpt ?? "", /\[redacted\]/);
+      assert.equal(detail.policyDecisions.length, 1);
+      assert.equal(detail.policyDecisions[0]?.code, "task_run_allowed");
+      assert.deepEqual(detail.externalSessionIds, ["ao-session-123"]);
+      assert.equal(buildEngineJobDetail(job, repository).id, job.id);
+    }));
+
+  it("computes 24h engine metrics from sqlite", () =>
+    withRepository((repository) => {
+      repository.createEngineJob({
+        id: "engine-job-metrics-failed",
+        kind: "demo-ping",
+        backend: "stub",
+        projectId: seedProject.id,
+        status: "failed",
+        payload: {},
+        queuedAt: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 5_000).toISOString(),
+        completedAt: new Date().toISOString(),
+      });
+
+      const metrics = repository.getEngineJobMetrics(seedProject.id);
+
+      assert.equal(metrics.windowHours, 24);
+      assert.ok(metrics.completed >= 1);
+      assert.ok(metrics.failed >= 1);
+      assert.ok(metrics.averageDurationMs !== null);
+      assert.ok(metrics.failureRate !== null);
+    }));
 
   it("builds queue counts across all job statuses", () => {
     const counts = buildEngineQueueCounts([

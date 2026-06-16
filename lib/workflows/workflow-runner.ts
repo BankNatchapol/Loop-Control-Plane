@@ -16,6 +16,7 @@ import type {
   WorkflowRunStep,
 } from "@/lib/loopboard";
 import { LoopScheduler } from "@/lib/engine/loop-scheduler";
+import { assertWorkflowRunEngineResumeAllowed } from "@/lib/engine/engine-job-recovery";
 import { evaluateWorkflowNodePolicy } from "@/lib/policies/automation-policy";
 
 export type WorkflowRunAction =
@@ -888,6 +889,73 @@ export const runNextWorkflowStepWithEngineTick = async ({
   }
 
   return runAfterAdvance;
+};
+
+export const resumeWorkflowRunFromEngine = async ({
+  repository,
+  runId,
+}: {
+  repository: LoopBoardRepository;
+  runId: string;
+}): Promise<WorkflowRun> => {
+  assertWorkflowRunEngineResumeAllowed(repository, runId);
+
+  const run = repository.getWorkflowRun(runId);
+
+  if (run.status === "completed" || run.status === "cancelled") {
+    throw new UnsupportedTransitionError(
+      `Workflow run "${run.id}" cannot be resumed after reaching ${run.status}.`,
+    );
+  }
+
+  const workflow = repository.getWorkflow(run.workflowId);
+  const node = findCurrentNode(workflow, run);
+  const step = latestStepForNode(run, node.id);
+
+  if (run.status === "paused") {
+    if (step?.status === "waiting-approval") {
+      throw new UnsupportedTransitionError(
+        "Approve the waiting workflow step before resuming the run.",
+      );
+    }
+
+    resumeWorkflowRun({ repository, runId });
+  }
+
+  if (run.status === "failed") {
+    const jobs = repository.listEngineJobs({
+      workflowRunId: run.id,
+      workflowNodeId: node.id,
+      limit: 1,
+    });
+    const latestJob = jobs[0];
+
+    if (latestJob?.status === "completed") {
+      const advanced = completeWorkflowStepFromEngineJob({
+        repository,
+        job: latestJob,
+        success: true,
+      });
+
+      if (advanced) {
+        return advanced;
+      }
+    }
+
+    repository.updateWorkflowRun(run.id, {
+      status: "running",
+      completedAt: null,
+      executionLogs: appendLog(
+        run.executionLogs,
+        "info",
+        "Workflow run reopened for engine resume after failure.",
+        { nodeId: node.id, operatorAction: "engine-resume" },
+      ),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  return runNextWorkflowStepWithEngineTick({ repository, runId });
 };
 
 export const applyWorkflowRunAction = ({

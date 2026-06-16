@@ -1,10 +1,12 @@
 import type { LoopBoardRepository } from "@/lib/db/loopboard-repository";
 import { ValidationError } from "@/lib/db/loopboard-repository";
+import type { ListEngineJobsOptions } from "@/lib/db/loopboard-repository";
 import type {
   EngineJob,
   EngineJobStatus,
   EngineRunLogEntry,
   EngineSchedulerStatus,
+  ExecutorBackend,
 } from "@/lib/engine/loop-engine-types";
 import {
   LoopScheduler,
@@ -26,7 +28,18 @@ import {
   isProjectAutoAdvanceEnabled,
   type AutoAdvanceStopReason,
 } from "@/lib/engine/auto-advance";
+import {
+  cancelEngineJob,
+  describeEngineJobOperatorActions,
+  describeWorkflowRunEngineResume,
+  retryEngineJob,
+  type EngineJobOperatorActionState,
+  type EngineJobOperatorActions,
+  type WorkflowRunEngineResumeAction,
+} from "@/lib/engine/engine-job-recovery";
+import type { WorkflowRun } from "@/lib/loopboard";
 import { redactSensitiveText } from "@/lib/security/safe-context";
+import { resumeWorkflowRunFromEngine } from "@/lib/workflows/workflow-runner";
 
 const ENGINE_JOB_STATUSES: EngineJobStatus[] = [
   "queued",
@@ -57,6 +70,48 @@ export type EngineJobSummary = {
 
 export type EngineQueueCounts = Record<EngineJobStatus, number>;
 
+export type EngineJobPolicyDecision = {
+  timestamp: string;
+  message: string;
+  code?: string;
+  kind?: string;
+};
+
+export type EngineJobDetail = EngineJobSummary & {
+  executionLogs: EngineRunLogEntry[];
+  payloadSummary: Record<string, unknown>;
+  resultSummary?: Record<string, unknown>;
+  stdoutExcerpt?: string;
+  stderrExcerpt?: string;
+  policyDecisions: EngineJobPolicyDecision[];
+  externalSessionIds: string[];
+  operatorActions: EngineJobOperatorActions;
+};
+
+export type EngineJobRecoveryResponse = {
+  job: EngineJobSummary;
+};
+
+export type WorkflowRunEngineResumeResponse = {
+  run: WorkflowRun;
+  resume: WorkflowRunEngineResumeAction;
+};
+
+export type EngineJobListResponse = {
+  jobs: EngineJobSummary[];
+};
+
+export type EngineJobMetrics = {
+  windowHours: number;
+  since: string;
+  queued: number;
+  running: number;
+  completed: number;
+  failed: number;
+  averageDurationMs: number | null;
+  failureRate: number | null;
+};
+
 export type EngineAutoAdvanceStatus = {
   projectEnabled: boolean;
   globallyEnabled: boolean;
@@ -71,6 +126,9 @@ export type EngineStatusResponse = {
   recentJobs: EngineJobSummary[];
   automationPolicy: PolicyDecision;
   autoAdvance?: EngineAutoAdvanceStatus;
+  workflowRunResume?: WorkflowRunEngineResumeAction;
+  activeJobCount: number;
+  metrics?: EngineJobMetrics;
 };
 
 export type EngineSchedulerActionResponse = {
@@ -110,6 +168,186 @@ export const summarizeEngineJob = (job: EngineJob): EngineJobSummary => {
     lastLogMessage: lastLog?.message,
   };
 };
+
+const redactUnknownValue = (value: unknown): unknown => {
+  if (typeof value === "string") {
+    return redactSensitiveText(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(redactUnknownValue);
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, redactUnknownValue(entry)]),
+    );
+  }
+
+  return value;
+};
+
+const readJobExcerpt = (
+  job: EngineJob,
+  field: "stdoutSummary" | "stderrSummary",
+): string | undefined => {
+  const fromResult = job.result?.[field];
+  if (typeof fromResult === "string" && fromResult.trim().length > 0) {
+    return redactSensitiveText(fromResult).slice(0, 2000);
+  }
+
+  for (const entry of [...job.executionLogs].reverse()) {
+    const fromLog = entry.metadata?.[field];
+    if (typeof fromLog === "string" && fromLog.trim().length > 0) {
+      return redactSensitiveText(fromLog).slice(0, 2000);
+    }
+  }
+
+  return undefined;
+};
+
+const extractPolicyDecisions = (
+  logs: EngineRunLogEntry[],
+): EngineJobPolicyDecision[] =>
+  logs
+    .filter(
+      (entry) =>
+        typeof entry.metadata?.policyCode === "string" ||
+        typeof entry.metadata?.policyKind === "string" ||
+        entry.message.toLowerCase().includes("policy"),
+    )
+    .map((entry) => ({
+      timestamp: entry.timestamp,
+      message: entry.message,
+      ...(typeof entry.metadata?.policyCode === "string"
+        ? { code: entry.metadata.policyCode }
+        : {}),
+      ...(typeof entry.metadata?.policyKind === "string"
+        ? { kind: entry.metadata.policyKind }
+        : {}),
+    }));
+
+const extractExternalSessionIds = (job: EngineJob): string[] => {
+  const sessionIds = new Set<string>();
+
+  if (typeof job.result?.externalSessionId === "string") {
+    sessionIds.add(job.result.externalSessionId);
+  }
+
+  for (const entry of job.executionLogs) {
+    if (typeof entry.metadata?.sessionId === "string") {
+      sessionIds.add(entry.metadata.sessionId);
+    }
+
+    if (typeof entry.metadata?.externalSessionId === "string") {
+      sessionIds.add(entry.metadata.externalSessionId);
+    }
+  }
+
+  return [...sessionIds];
+};
+
+export const buildEngineJobDetail = (
+  job: EngineJob,
+  repository: LoopBoardRepository,
+): EngineJobDetail => {
+  const summary = summarizeEngineJob(job);
+  const payloadSummary = redactUnknownValue(job.payload) as Record<string, unknown>;
+  const resultSummary =
+    job.result === undefined
+      ? undefined
+      : (redactUnknownValue(job.result) as Record<string, unknown>);
+
+  return {
+    ...summary,
+    executionLogs: job.executionLogs.map(redactEngineLogEntry),
+    payloadSummary,
+    ...(resultSummary ? { resultSummary } : {}),
+    ...(readJobExcerpt(job, "stdoutSummary")
+      ? { stdoutExcerpt: readJobExcerpt(job, "stdoutSummary") }
+      : {}),
+    ...(readJobExcerpt(job, "stderrSummary")
+      ? { stderrExcerpt: readJobExcerpt(job, "stderrSummary") }
+      : {}),
+    policyDecisions: extractPolicyDecisions(job.executionLogs),
+    externalSessionIds: extractExternalSessionIds(job),
+    operatorActions: describeEngineJobOperatorActions(repository, job),
+  };
+};
+
+export const parseEngineJobListQuery = (url: URL): ListEngineJobsOptions => {
+  const options: ListEngineJobsOptions = {};
+  const projectId = url.searchParams.get("projectId");
+  const taskId = url.searchParams.get("taskId");
+  const workflowRunId = url.searchParams.get("workflowRunId");
+  const backend = url.searchParams.get("backend");
+  const kind = url.searchParams.get("kind");
+  const status = url.searchParams.get("status");
+  const limit = url.searchParams.get("limit");
+
+  if (projectId?.trim()) {
+    options.projectId = projectId.trim();
+  }
+
+  if (taskId?.trim()) {
+    options.taskId = taskId.trim();
+  }
+
+  if (workflowRunId?.trim()) {
+    options.workflowRunId = workflowRunId.trim();
+  }
+
+  if (backend?.trim()) {
+    options.backend = backend.trim() as ExecutorBackend;
+  }
+
+  if (kind?.trim()) {
+    options.kind = kind.trim() as EngineJob["kind"];
+  }
+
+  if (status?.trim()) {
+    const statuses = status
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0) as EngineJobStatus[];
+
+    if (statuses.length === 1) {
+      options.status = statuses[0];
+    } else if (statuses.length > 1) {
+      options.status = statuses;
+    }
+  }
+
+  if (limit?.trim()) {
+    const parsedLimit = Number(limit);
+    if (!Number.isFinite(parsedLimit) || parsedLimit <= 0) {
+      throw new ValidationError("limit must be a positive integer.");
+    }
+
+    options.limit = parsedLimit;
+  }
+
+  return options;
+};
+
+export const listEngineJobsForApi = (
+  repository: LoopBoardRepository,
+  options: ListEngineJobsOptions = {},
+): EngineJobListResponse => {
+  if (options.projectId) {
+    repository.getProject(options.projectId);
+  }
+
+  return {
+    jobs: repository.listEngineJobs(options).map(summarizeEngineJob),
+  };
+};
+
+export const getEngineJobDetail = (
+  repository: LoopBoardRepository,
+  jobId: string,
+): EngineJobDetail =>
+  buildEngineJobDetail(repository.getEngineJob(jobId), repository);
 
 const emptyQueueCounts = (): EngineQueueCounts =>
   Object.fromEntries(
@@ -172,14 +410,32 @@ export const getEngineStatus = (
     };
   }
 
+  const queueCounts = buildEngineQueueCounts(jobsForCounts);
+  const latestRunForResume =
+    projectId === undefined
+      ? undefined
+      : repository.getLatestWorkflowRunForProject(projectId);
+
   return {
     scheduler: repository.getEngineSchedulerStatus(),
-    queueCounts: buildEngineQueueCounts(jobsForCounts),
+    queueCounts,
     recentJobs,
     automationPolicy: describeEffectiveAutomationPolicy({
       automationSettings,
     }),
     autoAdvance,
+    ...(latestRunForResume
+      ? {
+          workflowRunResume: describeWorkflowRunEngineResume(
+            repository,
+            latestRunForResume.id,
+          ),
+        }
+      : {}),
+    activeJobCount: queueCounts.queued + queueCounts.running,
+    ...(projectId
+      ? { metrics: repository.getEngineJobMetrics(projectId) }
+      : {}),
   };
 };
 
@@ -270,4 +526,32 @@ export const readEngineTickMode = (body: unknown): TickMode => {
   }
 
   return "manual";
+};
+
+export const retryEngineJobForApi = (
+  repository: LoopBoardRepository,
+  jobId: string,
+): EngineJobRecoveryResponse => ({
+  job: summarizeEngineJob(retryEngineJob(repository, jobId)),
+});
+
+export const cancelEngineJobForApi = async (
+  repository: LoopBoardRepository,
+  jobId: string,
+): Promise<EngineJobRecoveryResponse> => ({
+  job: summarizeEngineJob(await cancelEngineJob(repository, jobId)),
+});
+
+export const resumeWorkflowRunFromEngineForApi = async (
+  repository: LoopBoardRepository,
+  runId: string,
+): Promise<WorkflowRunEngineResumeResponse> => ({
+  resume: describeWorkflowRunEngineResume(repository, runId),
+  run: await resumeWorkflowRunFromEngine({ repository, runId }),
+});
+
+export type {
+  EngineJobOperatorActionState,
+  EngineJobOperatorActions,
+  WorkflowRunEngineResumeAction,
 };

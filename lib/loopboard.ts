@@ -112,7 +112,8 @@ export type TaskEventType =
   | "ENGINE_PICKUP_SKIPPED"
   | "ENGINE_EXTERNAL_SYNC"
   | "ENGINE_TASK_COMPLETED"
-  | "ENGINE_TASK_FAILED";
+  | "ENGINE_TASK_FAILED"
+  | "ENGINE_TASK_CANCELLED";
 
 export type TaskAction =
   | "assign-ai"
@@ -1727,7 +1728,8 @@ const isEventType = (value: unknown): value is TaskEventType =>
   value === "ENGINE_PICKUP_SKIPPED" ||
   value === "ENGINE_EXTERNAL_SYNC" ||
   value === "ENGINE_TASK_COMPLETED" ||
-  value === "ENGINE_TASK_FAILED";
+  value === "ENGINE_TASK_FAILED" ||
+  value === "ENGINE_TASK_CANCELLED";
 
 const sanitizeMetadata = (
   value: unknown,

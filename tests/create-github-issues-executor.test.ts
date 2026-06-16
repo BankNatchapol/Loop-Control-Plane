@@ -122,6 +122,60 @@ describe("create-github-issues-executor", () => {
     });
   });
 
+  it("skips existing GitHub issues on retry without creating duplicates", async () => {
+    await withGitHubIssueFixture(async ({ repository, featureId }) => {
+      const outputArtifacts: WorkflowArtifact[] = [
+        {
+          name: "github-issues",
+          path: "https://github.com/{repository}/issues",
+          required: true,
+        },
+      ];
+      const createIssue = async ({ title }: { title: string }) => ({
+        status: "created" as const,
+        repository: "bank-p/loop-control-plane",
+        message: `Created GitHub issue for ${title}.`,
+        issueNumber: 42,
+        issueUrl: "https://github.com/bank-p/loop-control-plane/issues/42",
+        labels: ["loopboard", "risk-low"],
+        createdAt: "2026-06-16T00:00:00.000Z",
+      });
+
+      const first = await executeCreateGitHubIssues({
+        repository,
+        featureId,
+        workflowRunId: "run-001",
+        outputArtifacts,
+        token: "token",
+        automationSettings: {
+          ...defaultAutomationSettings,
+          globalAutoRunEnabled: true,
+        },
+        createIssue,
+      });
+      const retry = await executeCreateGitHubIssues({
+        repository,
+        featureId,
+        workflowRunId: "run-001",
+        outputArtifacts,
+        token: "token",
+        automationSettings: {
+          ...defaultAutomationSettings,
+          globalAutoRunEnabled: true,
+        },
+        createIssue: async () => {
+          throw new Error("createIssue should not run when issues already exist.");
+        },
+      });
+
+      assert.equal(first.success, true);
+      assert.equal(first.result?.createdCount, 1);
+      assert.equal(retry.success, true);
+      assert.equal(retry.result?.createdCount, 0);
+      assert.equal(retry.result?.skippedExistingCount, 1);
+    });
+  });
+
   it("fails when automation policy blocks low-risk auto issue creation", async () => {
     await withGitHubIssueFixture(async ({ repository, featureId, projectId }) => {
       const project = repository.getProject(projectId);

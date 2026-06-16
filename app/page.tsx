@@ -38,6 +38,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  RotateCw,
   RotateCcw,
   Save,
   ShieldAlert,
@@ -67,7 +68,11 @@ import {
   enqueueTaskLoop,
   fetchBoardData,
   fetchBackendAvailability,
+  cancelEngineJob,
+  fetchEngineJobDetail,
   fetchEngineStatus,
+  retryEngineJob,
+  resumeWorkflowRunFromEngine,
   generatePersistedTaskClaudeCodePrompt,
   importSpecKitTasks,
   movePersistedTask,
@@ -96,8 +101,13 @@ import {
   type TaskContextActionResult,
   type TaskOpenActionResult,
   type BackendAvailabilityResponse,
+  type EngineJobDetail,
 } from "@/lib/api/loopboard-client";
-import type { EngineStatusResponse, EngineJobSummary } from "@/lib/api/engine-actions";
+import type {
+  EngineJobMetrics,
+  EngineStatusResponse,
+  EngineJobSummary,
+} from "@/lib/api/engine-actions";
 import { isTaskStructurallyEligible } from "@/lib/engine/task-loop-planner";
 import {
   EXECUTOR_BACKENDS,
@@ -134,6 +144,7 @@ import {
   type TaskAction,
   type Task,
   type TaskEvent,
+  type WorkflowRun,
   formatTimestamp,
   riskStyle,
   statusLabel,
@@ -193,7 +204,7 @@ type BoardQuickFilter =
 type DashboardMetric = {
   id?: BoardQuickFilter;
   label: string;
-  value: number;
+  value: number | string;
   detail?: string;
 };
 
@@ -585,6 +596,52 @@ function riskMetrics(tasks: Task[]): DashboardMetric[] {
     label: risk,
     value: tasks.filter((task) => task.risk === risk).length,
   }));
+}
+
+function formatEngineDuration(durationMs: number): string {
+  if (durationMs < 1000) {
+    return `${Math.round(durationMs)}ms`;
+  }
+
+  if (durationMs < 60_000) {
+    return `${(durationMs / 1000).toFixed(1)}s`;
+  }
+
+  return `${(durationMs / 60_000).toFixed(1)}m`;
+}
+
+function engineMetrics(metrics?: EngineJobMetrics): DashboardMetric[] {
+  if (!metrics) {
+    return [
+      { label: "Queued", value: "0", detail: "last 24h" },
+      { label: "Running", value: "0", detail: "last 24h" },
+      { label: "Completed", value: "0", detail: "last 24h" },
+      { label: "Failed", value: "0", detail: "last 24h" },
+      { label: "Avg Duration", value: "—", detail: "finished jobs" },
+      { label: "Failure Rate", value: "—", detail: "completed + failed" },
+    ];
+  }
+
+  return [
+    { label: "Queued", value: String(metrics.queued), detail: "last 24h" },
+    { label: "Running", value: String(metrics.running), detail: "last 24h" },
+    { label: "Completed", value: String(metrics.completed), detail: "last 24h" },
+    { label: "Failed", value: String(metrics.failed), detail: "last 24h" },
+    {
+      label: "Avg Duration",
+      value:
+        metrics.averageDurationMs == null
+          ? "—"
+          : formatEngineDuration(metrics.averageDurationMs),
+      detail: "finished jobs",
+    },
+    {
+      label: "Failure Rate",
+      value:
+        metrics.failureRate == null ? "—" : `${(metrics.failureRate * 100).toFixed(1)}%`,
+      detail: "completed + failed",
+    },
+  ];
 }
 
 function applyBoardQuickFilter(tasks: Task[], filter: BoardQuickFilter): Task[] {
@@ -1232,11 +1289,13 @@ function LoopEnginePanel({
   engineMessage,
   globalAutoRunEnabled,
   automationPolicyMessage,
+  latestWorkflowRun,
   onRunDemoJob,
   onTickOnce,
   onStartScheduler,
   onStopScheduler,
   onRefresh,
+  onWorkflowResumed,
 }: {
   project?: Project;
   engineStatus: EngineStatusResponse | null;
@@ -1248,12 +1307,61 @@ function LoopEnginePanel({
   engineMessage: string;
   globalAutoRunEnabled: boolean;
   automationPolicyMessage: string;
+  latestWorkflowRun?: WorkflowRun;
   onRunDemoJob: () => void;
   onTickOnce: () => void;
   onStartScheduler: () => void;
   onStopScheduler: () => void;
   onRefresh: () => void;
+  onWorkflowResumed: () => void;
 }) {
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const [jobDetail, setJobDetail] = useState<EngineJobDetail | null>(null);
+  const [jobDetailError, setJobDetailError] = useState("");
+  const [isLoadingJobDetail, setIsLoadingJobDetail] = useState(false);
+  const [jobRecoveryAction, setJobRecoveryAction] = useState("");
+  const [jobRecoveryError, setJobRecoveryError] = useState("");
+  const [workflowResumeAction, setWorkflowResumeAction] = useState("");
+  const [workflowResumeError, setWorkflowResumeError] = useState("");
+
+  useEffect(() => {
+    if (!selectedJobId) {
+      setJobDetail(null);
+      setJobDetailError("");
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingJobDetail(true);
+    setJobDetailError("");
+
+    void fetchEngineJobDetail(selectedJobId)
+      .then((detail) => {
+        if (!cancelled) {
+          setJobDetail(detail);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setJobDetail(null);
+          setJobDetailError(
+            error instanceof LoopBoardApiError
+              ? error.message
+              : "Loop Control Plane could not load engine job details.",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingJobDetail(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedJobId]);
+
   if (!project) {
     return null;
   }
@@ -1268,6 +1376,85 @@ function LoopEnginePanel({
     "none";
   const canStartScheduler = globalAutoRunEnabled;
   const schedulerIsRunning = schedulerStatus === "running";
+  const workflowRunResume = engineStatus?.workflowRunResume;
+  const canResumeWorkflowRun = workflowRunResume?.allowed === true;
+  const workflowRunResumeTooltip = canResumeWorkflowRun
+    ? "Continue workflow run after approval or retried engine failure"
+    : (workflowRunResume?.message ??
+      (latestWorkflowRun
+        ? `Workflow run is ${latestWorkflowRun.status} and cannot be resumed.`
+        : "No workflow run is available to resume."));
+
+  async function retrySelectedJob() {
+    if (!selectedJobId || !jobDetail?.operatorActions.retry.allowed) {
+      return;
+    }
+
+    setJobRecoveryAction("retry");
+    setJobRecoveryError("");
+
+    try {
+      await retryEngineJob(selectedJobId);
+      onRefresh();
+      const detail = await fetchEngineJobDetail(selectedJobId);
+      setJobDetail(detail);
+    } catch (error) {
+      setJobRecoveryError(
+        error instanceof LoopBoardApiError
+          ? error.message
+          : "Loop Control Plane could not retry the engine job.",
+      );
+    } finally {
+      setJobRecoveryAction("");
+    }
+  }
+
+  async function cancelSelectedJob() {
+    if (!selectedJobId || !jobDetail?.operatorActions.cancel.allowed) {
+      return;
+    }
+
+    setJobRecoveryAction("cancel");
+    setJobRecoveryError("");
+
+    try {
+      await cancelEngineJob(selectedJobId);
+      onRefresh();
+      const detail = await fetchEngineJobDetail(selectedJobId);
+      setJobDetail(detail);
+    } catch (error) {
+      setJobRecoveryError(
+        error instanceof LoopBoardApiError
+          ? error.message
+          : "Loop Control Plane could not cancel the engine job.",
+      );
+    } finally {
+      setJobRecoveryAction("");
+    }
+  }
+
+  async function resumeLatestWorkflowRun() {
+    if (!latestWorkflowRun || !canResumeWorkflowRun) {
+      return;
+    }
+
+    setWorkflowResumeAction("resume");
+    setWorkflowResumeError("");
+
+    try {
+      await resumeWorkflowRunFromEngine(latestWorkflowRun.id);
+      onWorkflowResumed();
+      onRefresh();
+    } catch (error) {
+      setWorkflowResumeError(
+        error instanceof LoopBoardApiError
+          ? error.message
+          : "Loop Control Plane could not resume the workflow run.",
+      );
+    } finally {
+      setWorkflowResumeAction("");
+    }
+  }
 
   return (
     <section
@@ -1463,6 +1650,38 @@ function LoopEnginePanel({
               Paused: {engineStatus.autoAdvance.pauseReason.message}
             </p>
           ) : null}
+          {latestWorkflowRun ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void resumeLatestWorkflowRun()}
+                disabled={
+                  !canResumeWorkflowRun ||
+                  workflowResumeAction.length > 0 ||
+                  engineAction.length > 0
+                }
+                title={workflowRunResumeTooltip}
+                className="inline-flex items-center gap-1.5 border border-sky-700 bg-sky-700 px-2.5 py-1 text-xs font-semibold text-white hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-50"
+                data-testid="engine-resume-workflow-run"
+              >
+                <RotateCw
+                  className={clsx(
+                    "h-3.5 w-3.5 shrink-0",
+                    workflowResumeAction === "resume" && "animate-spin",
+                  )}
+                />
+                Resume Run
+              </button>
+              <span className="truncate font-mono text-[10px] text-slate-500">
+                {latestWorkflowRun.id}
+              </span>
+            </div>
+          ) : null}
+          {workflowResumeError ? (
+            <p className="mt-2 border border-red-200 bg-red-50 px-2 py-1 text-red-800">
+              {workflowResumeError}
+            </p>
+          ) : null}
         </div>
       ) : null}
 
@@ -1500,7 +1719,17 @@ function LoopEnginePanel({
               </tr>
             ) : (
               engineStatus?.recentJobs.map((job) => (
-                <tr key={job.id} className="border-b border-slate-100 last:border-b-0">
+                <tr
+                  key={job.id}
+                  className={clsx(
+                    "cursor-pointer border-b border-slate-100 last:border-b-0 hover:bg-sky-50/60",
+                    selectedJobId === job.id && "bg-sky-50",
+                  )}
+                  onClick={() =>
+                    setSelectedJobId((current) => (current === job.id ? null : job.id))
+                  }
+                  data-testid={`engine-job-row-${job.id}`}
+                >
                   <td className="px-2 py-1.5">
                     <p className="font-semibold text-slate-950">{job.kind}</p>
                     <p className="truncate font-mono text-[10px] text-slate-500">
@@ -1535,6 +1764,214 @@ function LoopEnginePanel({
           </tbody>
         </table>
       </div>
+
+      {selectedJobId ? (
+        <div
+          className="mt-3 border border-slate-200 bg-white p-3"
+          data-testid="engine-job-detail-drawer"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase text-slate-500">
+                Job Detail
+              </p>
+              <p className="mt-1 truncate font-mono text-xs text-slate-950">
+                {selectedJobId}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSelectedJobId(null)}
+              className="inline-flex items-center gap-1 border border-slate-300 bg-white px-2 py-1 text-[10px] font-semibold uppercase text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800"
+              data-testid="engine-job-detail-close"
+            >
+              <X className="h-3 w-3" />
+              Close
+            </button>
+          </div>
+
+          {jobDetail ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void retrySelectedJob()}
+                disabled={
+                  !jobDetail.operatorActions.retry.allowed ||
+                  jobRecoveryAction.length > 0
+                }
+                title={
+                  jobDetail.operatorActions.retry.allowed
+                    ? "Requeue this failed engine job"
+                    : (jobDetail.operatorActions.retry.message ??
+                      "Retry is not available for this job.")
+                }
+                className="inline-flex items-center gap-1.5 border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+                data-testid="engine-job-retry"
+              >
+                <RotateCw
+                  className={clsx(
+                    "h-3.5 w-3.5 shrink-0",
+                    jobRecoveryAction === "retry" && "animate-spin",
+                  )}
+                />
+                Retry
+              </button>
+              <button
+                type="button"
+                onClick={() => void cancelSelectedJob()}
+                disabled={
+                  !jobDetail.operatorActions.cancel.allowed ||
+                  jobRecoveryAction.length > 0
+                }
+                title={
+                  jobDetail.operatorActions.cancel.allowed
+                    ? "Cancel this engine job and release task/workflow locks"
+                    : (jobDetail.operatorActions.cancel.message ??
+                      "Cancel is not available for this job.")
+                }
+                className="inline-flex items-center gap-1.5 border border-red-300 bg-white px-2.5 py-1 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                data-testid="engine-job-cancel"
+              >
+                <X className="h-3.5 w-3.5 shrink-0" />
+                Cancel
+              </button>
+            </div>
+          ) : null}
+          {jobRecoveryError ? (
+            <p className="mt-2 border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-800">
+              {jobRecoveryError}
+            </p>
+          ) : null}
+
+          {isLoadingJobDetail ? (
+            <p className="mt-3 text-xs text-slate-500">Loading job detail…</p>
+          ) : null}
+          {jobDetailError ? (
+            <p className="mt-3 border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-800">
+              {jobDetailError}
+            </p>
+          ) : null}
+          {jobDetail ? (
+            <div className="mt-3 grid gap-3 lg:grid-cols-2">
+              <div className="min-w-0 border border-slate-200 bg-slate-50 p-2">
+                <p className="text-[10px] font-semibold uppercase text-slate-500">
+                  Payload Summary
+                </p>
+                <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px] leading-5 text-slate-700">
+                  {JSON.stringify(jobDetail.payloadSummary, null, 2)}
+                </pre>
+              </div>
+              <div className="min-w-0 border border-slate-200 bg-slate-50 p-2">
+                <p className="text-[10px] font-semibold uppercase text-slate-500">
+                  Attempts
+                </p>
+                <p className="mt-2 text-xs text-slate-700">
+                  Attempt {jobDetail.attempt} of {jobDetail.maxAttempts}
+                </p>
+                <p className="mt-2 text-[10px] font-semibold uppercase text-slate-500">
+                  Linked Context
+                </p>
+                <ul className="mt-1 space-y-1 text-xs text-slate-700">
+                  <li>
+                    Task:{" "}
+                    <span className="font-mono">{jobDetail.taskId ?? "none"}</span>
+                  </li>
+                  <li>
+                    Workflow run:{" "}
+                    <span className="font-mono">
+                      {jobDetail.workflowRunId ?? "none"}
+                    </span>
+                  </li>
+                  <li>
+                    Workflow node:{" "}
+                    <span className="font-mono">
+                      {jobDetail.workflowNodeId ?? "none"}
+                    </span>
+                  </li>
+                </ul>
+                {jobDetail.externalSessionIds.length > 0 ? (
+                  <>
+                    <p className="mt-2 text-[10px] font-semibold uppercase text-slate-500">
+                      External Session IDs
+                    </p>
+                    <ul className="mt-1 space-y-1 font-mono text-[10px] text-slate-700">
+                      {jobDetail.externalSessionIds.map((sessionId) => (
+                        <li key={sessionId}>{sessionId}</li>
+                      ))}
+                    </ul>
+                  </>
+                ) : null}
+              </div>
+              {jobDetail.stdoutExcerpt ? (
+                <div className="min-w-0 border border-slate-200 bg-slate-50 p-2 lg:col-span-2">
+                  <p className="text-[10px] font-semibold uppercase text-slate-500">
+                    Stdout Excerpt
+                  </p>
+                  <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px] leading-5 text-slate-700">
+                    {jobDetail.stdoutExcerpt}
+                  </pre>
+                </div>
+              ) : null}
+              {jobDetail.stderrExcerpt ? (
+                <div className="min-w-0 border border-slate-200 bg-slate-50 p-2 lg:col-span-2">
+                  <p className="text-[10px] font-semibold uppercase text-slate-500">
+                    Stderr Excerpt
+                  </p>
+                  <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px] leading-5 text-red-800">
+                    {jobDetail.stderrExcerpt}
+                  </pre>
+                </div>
+              ) : null}
+              {jobDetail.policyDecisions.length > 0 ? (
+                <div className="min-w-0 border border-slate-200 bg-slate-50 p-2 lg:col-span-2">
+                  <p className="text-[10px] font-semibold uppercase text-slate-500">
+                    Policy Decisions
+                  </p>
+                  <ul className="mt-2 space-y-1 text-xs text-slate-700">
+                    {jobDetail.policyDecisions.map((decision) => (
+                      <li
+                        key={`${decision.timestamp}-${decision.message}`}
+                        className="border border-slate-200 bg-white px-2 py-1"
+                      >
+                        <span className="font-mono text-[10px] text-slate-500">
+                          {formatTimestamp(decision.timestamp)}
+                        </span>
+                        {decision.code ? (
+                          <span className="ml-2 font-semibold uppercase text-slate-950">
+                            {decision.code}
+                          </span>
+                        ) : null}
+                        <p className="mt-0.5">{decision.message}</p>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              <div className="min-w-0 border border-slate-200 bg-slate-50 p-2 lg:col-span-2">
+                <p className="text-[10px] font-semibold uppercase text-slate-500">
+                  Execution Log Timeline
+                </p>
+                <ul className="mt-2 max-h-64 space-y-1 overflow-auto text-xs text-slate-700">
+                  {jobDetail.executionLogs.map((entry) => (
+                    <li
+                      key={`${entry.timestamp}-${entry.message}`}
+                      className="border border-slate-200 bg-white px-2 py-1"
+                    >
+                      <span className="font-mono text-[10px] text-slate-500">
+                        {formatTimestamp(entry.timestamp)}
+                      </span>
+                      <span className="ml-2 font-semibold uppercase text-slate-950">
+                        {entry.level}
+                      </span>
+                      <p className="mt-0.5">{entry.message}</p>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -3029,6 +3466,10 @@ export default function Home() {
   const projectStatusMetrics = useMemo(() => statusMetrics(projectTasks), [projectTasks]);
   const projectOwnerMetrics = useMemo(() => ownerMetrics(projectTasks), [projectTasks]);
   const projectRiskMetrics = useMemo(() => riskMetrics(projectTasks), [projectTasks]);
+  const projectEngineMetrics = useMemo(
+    () => engineMetrics(engineStatus?.metrics),
+    [engineStatus?.metrics],
+  );
   const selectedTask =
     visibleTasks.find((task) => task.id === selectedTaskId) ??
     visibleTasks[0] ??
@@ -4547,6 +4988,13 @@ export default function Home() {
                     ? "global auto-run enabled"
                     : "global auto-run disabled"}
                 </span>
+                <span
+                  className="border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs font-semibold uppercase text-indigo-800"
+                  data-testid="engine-active-jobs-header"
+                >
+                  <Bot className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />
+                  {engineStatus?.activeJobCount ?? 0} engine jobs active
+                </span>
               </div>
               <h1 className="mt-2 text-xl font-semibold tracking-normal text-slate-950 sm:text-2xl">
                 {selectedProject?.name ?? "Loop Control Plane"}
@@ -4602,12 +5050,13 @@ export default function Home() {
           </div>
 
           <section
-            className="grid gap-3 border border-slate-200 bg-slate-50 p-3 lg:grid-cols-3"
+            className="grid gap-3 border border-slate-200 bg-slate-50 p-3 lg:grid-cols-2 xl:grid-cols-4"
             data-testid="project-metrics"
           >
             <MetricGroup title="Tasks By Status" metrics={projectStatusMetrics} />
             <MetricGroup title="Tasks By Owner" metrics={projectOwnerMetrics} />
             <MetricGroup title="Tasks By Risk" metrics={projectRiskMetrics} />
+            <MetricGroup title="Engine (24h)" metrics={projectEngineMetrics} />
           </section>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -4760,6 +5209,7 @@ export default function Home() {
             engineMessage={engineMessage}
             globalAutoRunEnabled={boardData.automationSettings.globalAutoRunEnabled}
             automationPolicyMessage={effectiveAutomationPolicy.message}
+            latestWorkflowRun={latestProjectWorkflowRun}
             onRunDemoJob={() => void runEngineDemoJob()}
             onTickOnce={() => void tickEngineOnce()}
             onStartScheduler={() => void startEngineSchedulerAction()}
@@ -4767,6 +5217,9 @@ export default function Home() {
             onRefresh={() => {
               void loadEngineStatus(selectedProject?.id);
               void loadBackendAvailability(selectedProject?.id);
+            }}
+            onWorkflowResumed={() => {
+              void loadBoard(selectedProject?.id);
             }}
           />
           {projectMode !== "idle" ? (

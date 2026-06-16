@@ -126,6 +126,55 @@ describe("import-tasks-executor", () => {
     });
   });
 
+  it("skips duplicate tasks on retry using importer duplicate detection", () => {
+    withImportFixture(({ repository, featureId, contextRoot }) => {
+      const inputArtifacts: WorkflowArtifact[] = [
+        {
+          name: "tasks",
+          path: "specs/checkout/tasks.md",
+          required: true,
+        },
+      ];
+      const outputArtifacts: WorkflowArtifact[] = [
+        {
+          name: "loopboard-tasks",
+          path: "loopboard://feature/{feature}/tasks",
+          required: true,
+        },
+      ];
+      const importer = new SpecKitTaskImporter(
+        repository,
+        new TaskContextService(contextRoot),
+      );
+
+      const first = executeImportTasks({
+        repository,
+        featureId,
+        inputArtifacts,
+        outputArtifacts,
+        importer,
+      });
+      const retry = executeImportTasks({
+        repository,
+        featureId,
+        inputArtifacts,
+        outputArtifacts,
+        importer,
+      });
+
+      assert.equal(first.success, true);
+      assert.equal(first.result?.importedCount, 2);
+      assert.equal(retry.success, true);
+      assert.equal(retry.result?.importedCount, 0);
+      assert.equal(retry.result?.skippedCount, 2);
+
+      const tasks = repository
+        .listBoardData("project-checkout")
+        .tasks.filter((task) => task.featureId === featureId);
+      assert.equal(tasks.length, 2);
+    });
+  });
+
   it("fails when tasks.md input file is missing", () => {
     withImportFixture(({ repository, featureId }) => {
       const result = executeImportTasks({

@@ -35,10 +35,15 @@ import type {
 import type { BackendAvailabilityResponse } from "@/lib/api/backend-availability-actions";
 import type {
   EngineDemoJobResponse,
+  EngineJobDetail,
+  EngineJobListResponse,
+  EngineJobMetrics,
+  EngineJobRecoveryResponse,
   EngineJobSummary,
   EngineSchedulerActionResponse,
   EngineStatusResponse,
   EngineTickResponse,
+  WorkflowRunEngineResumeResponse,
 } from "@/lib/api/engine-actions";
 import type {
   TaskLoopEnqueueResponse,
@@ -382,7 +387,80 @@ export const fetchEngineStatus = async (
   return readApiResponse<EngineStatusResponse>(response);
 };
 
-export type { BackendAvailabilityResponse };
+export const fetchEngineJobs = async (input: {
+  projectId?: string;
+  taskId?: string;
+  workflowRunId?: string;
+  status?: string;
+  backend?: string;
+  kind?: string;
+  limit?: number;
+} = {}): Promise<EngineJobListResponse> => {
+  const params = new URLSearchParams();
+
+  if (input.projectId) {
+    params.set("projectId", input.projectId);
+  }
+
+  if (input.taskId) {
+    params.set("taskId", input.taskId);
+  }
+
+  if (input.workflowRunId) {
+    params.set("workflowRunId", input.workflowRunId);
+  }
+
+  if (input.status) {
+    params.set("status", input.status);
+  }
+
+  if (input.backend) {
+    params.set("backend", input.backend);
+  }
+
+  if (input.kind) {
+    params.set("kind", input.kind);
+  }
+
+  if (input.limit !== undefined) {
+    params.set("limit", String(input.limit));
+  }
+
+  const query = params.toString();
+  const response = await fetch(`/api/engine/jobs${query ? `?${query}` : ""}`, {
+    cache: "no-store",
+  });
+
+  return readApiResponse<EngineJobListResponse>(response);
+};
+
+export const fetchEngineJobDetail = async (jobId: string): Promise<EngineJobDetail> => {
+  const response = await fetch(`/api/engine/jobs/${encodeURIComponent(jobId)}`, {
+    cache: "no-store",
+  });
+
+  return readApiResponse<EngineJobDetail>(response);
+};
+
+export const retryEngineJob = async (jobId: string): Promise<EngineJobRecoveryResponse> =>
+  writeJson<EngineJobRecoveryResponse>(
+    `/api/engine/jobs/${encodeURIComponent(jobId)}/retry`,
+    {},
+  );
+
+export const cancelEngineJob = async (jobId: string): Promise<EngineJobRecoveryResponse> =>
+  writeJson<EngineJobRecoveryResponse>(
+    `/api/engine/jobs/${encodeURIComponent(jobId)}/cancel`,
+    {},
+  );
+
+export const resumeWorkflowRunFromEngine = async (
+  runId: string,
+): Promise<WorkflowRunEngineResumeResponse> =>
+  writeJson<WorkflowRunEngineResumeResponse>(
+    `/api/workflow-runs/${encodeURIComponent(runId)}/engine-resume`,
+    {},
+  );
 
 export const fetchBackendAvailability = async (
   projectId?: string,
@@ -413,7 +491,16 @@ export const enqueueEngineDemoJob = async (
 ): Promise<EngineDemoJobResponse> =>
   writeJson<EngineDemoJobResponse>("/api/engine/demo-job", { projectId });
 
-export type { EngineJobSummary, PolicyDecision, TaskLoopEnqueueResponse, TaskLoopScanResponse };
+export type {
+  BackendAvailabilityResponse,
+  EngineJobDetail,
+  EngineJobListResponse,
+  EngineJobMetrics,
+  EngineJobSummary,
+  PolicyDecision,
+  TaskLoopEnqueueResponse,
+  TaskLoopScanResponse,
+};
 
 export const scanTaskLoop = async (input: {
   projectId?: string;

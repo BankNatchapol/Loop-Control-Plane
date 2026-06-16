@@ -339,9 +339,23 @@ export interface UpdateEngineJobInput {
 export interface ListEngineJobsOptions {
   projectId?: string;
   taskId?: string;
+  workflowRunId?: string;
+  workflowNodeId?: string;
   kind?: EngineJobKind;
   status?: EngineJobStatus | EngineJobStatus[];
+  backend?: ExecutorBackend;
   limit?: number;
+}
+
+export interface EngineJobMetricsSnapshot {
+  windowHours: number;
+  since: string;
+  queued: number;
+  running: number;
+  completed: number;
+  failed: number;
+  averageDurationMs: number | null;
+  failureRate: number | null;
 }
 
 export interface UpdateEngineSchedulerInput {
@@ -642,6 +656,7 @@ const eventTypes = new Set<TaskEventType>([
   "ENGINE_EXTERNAL_SYNC",
   "ENGINE_TASK_COMPLETED",
   "ENGINE_TASK_FAILED",
+  "ENGINE_TASK_CANCELLED",
 ]);
 const featureEventTypes = new Set<FeatureEventType>([
   "SPEC_APPROVED",
@@ -2829,6 +2844,21 @@ export class LoopBoardRepository {
       params.push(assertNonEmptyString(options.taskId, "taskId"));
     }
 
+    if (options.workflowRunId) {
+      clauses.push("workflow_run_id = ?");
+      params.push(assertNonEmptyString(options.workflowRunId, "workflowRunId"));
+    }
+
+    if (options.workflowNodeId) {
+      clauses.push("workflow_node_id = ?");
+      params.push(assertNonEmptyString(options.workflowNodeId, "workflowNodeId"));
+    }
+
+    if (options.backend) {
+      clauses.push("backend = ?");
+      params.push(assertExecutorBackend(options.backend));
+    }
+
     if (options.kind) {
       clauses.push("kind = ?");
       params.push(assertEngineJobKind(options.kind));
@@ -2863,6 +2893,75 @@ export class LoopBoardRepository {
       .all(...params, ...(limit === undefined ? [] : [limit])) as EngineJobRow[];
 
     return rows.map(engineJobFromRow);
+  }
+
+  getEngineJobMetrics(
+    projectId: string,
+    windowHours = 24,
+  ): EngineJobMetricsSnapshot {
+    const normalizedProjectId = assertNonEmptyString(projectId, "projectId");
+    const normalizedWindowHours = assertPositiveInteger(windowHours, "windowHours");
+    this.getProject(normalizedProjectId);
+
+    const since = new Date(
+      Date.now() - normalizedWindowHours * 60 * 60 * 1000,
+    ).toISOString();
+
+    const statusRows = this.database
+      .prepare(
+        `
+          SELECT status, COUNT(*) AS count
+          FROM engine_jobs
+          WHERE project_id = ? AND queued_at >= ?
+          GROUP BY status
+        `,
+      )
+      .all(normalizedProjectId, since) as Array<{
+      status: EngineJobStatus;
+      count: number;
+    }>;
+
+    const counts: Record<EngineJobStatus, number> = {
+      queued: 0,
+      running: 0,
+      completed: 0,
+      failed: 0,
+      cancelled: 0,
+    };
+
+    for (const row of statusRows) {
+      counts[row.status] = row.count;
+    }
+
+    const durationRow = this.database
+      .prepare(
+        `
+          SELECT AVG(
+            (strftime('%s', completed_at) - strftime('%s', started_at)) * 1000.0
+          ) AS averageDurationMs
+          FROM engine_jobs
+          WHERE project_id = ?
+            AND queued_at >= ?
+            AND started_at IS NOT NULL
+            AND completed_at IS NOT NULL
+        `,
+      )
+      .get(normalizedProjectId, since) as { averageDurationMs: number | null };
+
+    const completed = counts.completed;
+    const failed = counts.failed;
+    const terminal = completed + failed;
+
+    return {
+      windowHours: normalizedWindowHours,
+      since,
+      queued: counts.queued,
+      running: counts.running,
+      completed,
+      failed,
+      averageDurationMs: durationRow.averageDurationMs,
+      failureRate: terminal > 0 ? failed / terminal : null,
+    };
   }
 
   getEngineJob(jobId: string): EngineJob {

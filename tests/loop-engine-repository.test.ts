@@ -8,7 +8,7 @@ import { describe, it } from "node:test";
 import { applyMigrations } from "@/db/migrate";
 import { seedDatabase } from "@/db/seed";
 import { LoopBoardRepository } from "@/lib/db/loopboard-repository";
-import { seedProject } from "@/lib/loopboard";
+import { seedProject, seedFeatures } from "@/lib/loopboard";
 
 const withRepository = (test: (repository: LoopBoardRepository) => void) => {
   const tempDirectory = mkdtempSync(join(tmpdir(), "loop-engine-repository-"));
@@ -85,6 +85,37 @@ describe("Loop engine repository persistence", () => {
       });
       assert.equal(running.status, "running");
       assert.equal(repository.fetchNextQueuedJob()?.id, "engine-job-queued-2");
+    });
+  });
+
+  it("filters engine jobs by workflow run and backend", () => {
+    withRepository((repository) => {
+      repository.createWorkflowRun({
+        id: "workflow-run-filter-test",
+        workflowId: "workflow-feature-development-loop",
+        featureId: seedFeatures[0].id,
+        status: "running",
+        currentNodeId: "node-run-tests",
+      });
+
+      repository.createEngineJob({
+        id: "engine-job-workflow-filter",
+        kind: "workflow-step",
+        backend: "cursor",
+        projectId: seedProject.id,
+        workflowRunId: "workflow-run-filter-test",
+        workflowNodeId: "node-run-tests",
+        payload: {},
+      });
+
+      const filtered = repository.listEngineJobs({
+        projectId: seedProject.id,
+        workflowRunId: "workflow-run-filter-test",
+        backend: "cursor",
+      });
+
+      assert.equal(filtered.length, 1);
+      assert.equal(filtered[0]?.id, "engine-job-workflow-filter");
     });
   });
 
