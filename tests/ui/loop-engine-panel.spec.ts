@@ -60,3 +60,35 @@ test("keeps Loop Engine controls visible on mobile", async ({ page }) => {
   await expect(page.getByTestId("engine-tick-once")).toBeVisible();
   await expect(page.getByTestId("engine-start-scheduler")).toBeVisible();
 });
+
+test("shows engine empty states and metrics hint before first tick", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  await expect(page.getByTestId("engine-empty-state-engine-never-run")).toBeVisible();
+  await expect(page.getByTestId("engine-(24h)-empty-hint")).toContainText(
+    "No engine activity recorded in the last 24 hours",
+  );
+  await expect(page.getByTestId("backend-availability-chips")).toBeVisible();
+});
+
+test("keeps job recovery actions visible on mobile when drawer is open", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+
+  await page.getByTestId("engine-run-demo-job").click();
+  await page.getByTestId("engine-tick-once").click();
+
+  const completedRow = page.locator('[data-testid^="engine-job-row-"]').filter({
+    hasText: "completed",
+  });
+  await completedRow.first().click();
+
+  const recoveryActions = page.getByTestId("engine-job-recovery-actions");
+  await expect(recoveryActions).toBeVisible();
+  await expect(page.getByTestId("engine-job-retry")).toBeVisible();
+  await expect(page.getByTestId("engine-job-cancel")).toBeVisible();
+});

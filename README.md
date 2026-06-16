@@ -275,6 +275,29 @@ Auto nodes advance automatically. Human, semi-auto, and approval-required nodes 
 
 The dashboard **Loop Engine** panel runs persisted engine jobs through an in-app scheduler. Use **Run Demo Job** and **Tick Once** to exercise the stub executor without enabling global auto-run. When Cursor, Claude Code, Codex, or Agent Orchestrator CLIs are installed, configure project default backends and use **Run with Engine** on eligible tasks. See `docs/architecture/loop-execution-engine.md` and `docs/architecture/agent-orchestrator-bridge.md` for architecture, backend config, and policy gates.
 
+#### Enabling global auto-run safely
+
+Global auto-run is **off by default**. Turn it on only when you are ready for background scheduler ticks and optional workflow auto-advance:
+
+1. Open **Settings** (automation policy section) and confirm high/critical-risk tasks remain manual-only.
+2. Enable **Global auto-run** — the header badge switches from rose “disabled” to emerald “enabled”.
+3. In project **Engine settings**, enable **Auto-advance** only if you want unattended workflow progression after approvals are satisfied. Merge and manual-edit nodes always stop the run.
+4. Verify backend availability chips in the Loop Engine panel (stub is always available; CLIs must show “installed”).
+5. Click **Start Scheduler** in the Loop Engine panel. Use **Stop Scheduler** to pause background ticks without losing queued jobs.
+
+Start with **Run Demo Job** + **Tick Once** before enabling global auto-run so you can confirm queue, logs, and metrics without external side effects.
+
+#### Running the Feature Development Loop
+
+The bundled workflow `examples/workflows/feature-development-loop.json` walks a feature from human intake through Spec Kit artifacts, task import, AI implementation, tests, review, and pull request:
+
+1. Import or save the workflow JSON to your project's workflows folder and open it in the **Workflow Editor**.
+2. Select a feature and click **Start Run**. Approve human/semi nodes when the runner pauses.
+3. With global auto-run off, use **Run Next Step (Engine)** on each automatable node; with auto-run and project auto-advance on, the scheduler chains eligible steps until a human gate or hard stop.
+4. Watch the Loop Engine panel for job rows, the job detail drawer (payload, logs, retry/cancel), and **Engine (24h)** metrics on the project dashboard.
+
+High-risk seeded tasks and merge nodes never auto-execute regardless of auto-run settings.
+
 ## Available Scripts
 
 | Command | Description |

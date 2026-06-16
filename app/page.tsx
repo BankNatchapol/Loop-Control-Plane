@@ -51,6 +51,11 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  deriveEnginePanelEmptyStates,
+  describeEngineMetricsEmptyHint,
+  describeQueueDepthHint,
+} from "@/lib/engine/engine-panel-empty-states";
+import {
   LoopBoardApiError,
   approveFeatureArtifact,
   applyPersistedTaskAction,
@@ -1092,13 +1097,23 @@ function SourceArtifactRow({
 function MetricGroup({
   title,
   metrics,
+  emptyHint,
 }: {
   title: string;
   metrics: DashboardMetric[];
+  emptyHint?: string;
 }) {
   return (
     <div className="min-w-0">
       <p className="text-xs font-semibold uppercase text-slate-500">{title}</p>
+      {emptyHint ? (
+        <p
+          className="mt-1 text-[11px] leading-5 text-slate-500"
+          data-testid={`${title.toLowerCase().replace(/\s+/g, "-")}-empty-hint`}
+        >
+          {emptyHint}
+        </p>
+      ) : null}
       <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-3">
         {metrics.map((metric) => (
           <div
@@ -1384,6 +1399,22 @@ function LoopEnginePanel({
       (latestWorkflowRun
         ? `Workflow run is ${latestWorkflowRun.status} and cannot be resumed.`
         : "No workflow run is available to resume."));
+  const emptyStates = deriveEnginePanelEmptyStates({
+    tickCount: engineStatus?.scheduler.tickCount ?? 0,
+    lastTickAt: engineStatus?.scheduler.lastTickAt,
+    queuedCount: engineStatus?.queueCounts.queued ?? 0,
+    runningCount: engineStatus?.queueCounts.running ?? 0,
+    backends: backendAvailability?.backends,
+  });
+  const queueDepthHint = describeQueueDepthHint({
+    tickCount: engineStatus?.scheduler.tickCount ?? 0,
+    lastTickAt: engineStatus?.scheduler.lastTickAt,
+    queuedCount: engineStatus?.queueCounts.queued ?? 0,
+    runningCount: engineStatus?.queueCounts.running ?? 0,
+  });
+  const unavailableBackends = (backendAvailability?.backends ?? []).filter(
+    (chip) => !chip.available && chip.backend !== "stub",
+  );
 
   async function retrySelectedJob() {
     if (!selectedJobId || !jobDetail?.operatorActions.retry.allowed) {
@@ -1498,8 +1529,7 @@ function LoopEnginePanel({
           <p className="font-semibold uppercase text-slate-500">Queue Depth</p>
           <p className="mt-0.5 text-base font-semibold text-slate-950">{queueDepth}</p>
           <p className="mt-0.5 truncate text-[10px] text-slate-500">
-            {engineStatus?.queueCounts.queued ?? 0} queued ·{" "}
-            {engineStatus?.queueCounts.running ?? 0} running
+            {queueDepthHint}
           </p>
         </div>
         <div className="min-w-0 border border-slate-200 bg-white px-2 py-1.5">
@@ -1534,6 +1564,26 @@ function LoopEnginePanel({
         </div>
       </div>
 
+      {emptyStates.length > 0 ? (
+        <div className="mt-3 space-y-2" data-testid="engine-empty-states">
+          {emptyStates.map((state) => (
+            <div
+              key={state.kind}
+              data-testid={`engine-empty-state-${state.kind}`}
+              className={clsx(
+                "border px-2 py-1.5 text-xs leading-5",
+                state.tone === "warning"
+                  ? "border-amber-200 bg-amber-50 text-amber-900"
+                  : "border-sky-200 bg-sky-50 text-sky-900",
+              )}
+            >
+              <p className="font-semibold">{state.title}</p>
+              <p className="mt-0.5">{state.message}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       <div className="mt-3 border border-slate-200 bg-white p-2" data-testid="backend-availability-chips">
         <div className="flex flex-wrap items-center gap-2">
           <p className="text-[10px] font-semibold uppercase text-slate-500">
@@ -1564,6 +1614,18 @@ function LoopEnginePanel({
             </span>
           ) : null}
         </div>
+        {unavailableBackends.length > 0 ? (
+          <ul className="mt-2 space-y-1 text-[10px] leading-5 text-slate-600">
+            {unavailableBackends.map((chip) => (
+              <li key={chip.backend}>
+                <span className="font-semibold uppercase text-slate-700">
+                  {chip.backend}:
+                </span>{" "}
+                {chip.message}
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -1791,7 +1853,10 @@ function LoopEnginePanel({
           </div>
 
           {jobDetail ? (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
+            <div
+              className="mt-3 flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center"
+              data-testid="engine-job-recovery-actions"
+            >
               <button
                 type="button"
                 onClick={() => void retrySelectedJob()}
@@ -1805,7 +1870,7 @@ function LoopEnginePanel({
                     : (jobDetail.operatorActions.retry.message ??
                       "Retry is not available for this job.")
                 }
-                className="inline-flex items-center gap-1.5 border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex w-full items-center justify-center gap-1.5 border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
                 data-testid="engine-job-retry"
               >
                 <RotateCw
@@ -1829,7 +1894,7 @@ function LoopEnginePanel({
                     : (jobDetail.operatorActions.cancel.message ??
                       "Cancel is not available for this job.")
                 }
-                className="inline-flex items-center gap-1.5 border border-red-300 bg-white px-2.5 py-1 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex w-full items-center justify-center gap-1.5 border border-red-300 bg-white px-2.5 py-1 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
                 data-testid="engine-job-cancel"
               >
                 <X className="h-3.5 w-3.5 shrink-0" />
@@ -3470,6 +3535,10 @@ export default function Home() {
     () => engineMetrics(engineStatus?.metrics),
     [engineStatus?.metrics],
   );
+  const projectEngineMetricsEmptyHint = useMemo(
+    () => describeEngineMetricsEmptyHint(engineStatus?.metrics),
+    [engineStatus?.metrics],
+  );
   const selectedTask =
     visibleTasks.find((task) => task.id === selectedTaskId) ??
     visibleTasks[0] ??
@@ -5061,7 +5130,11 @@ export default function Home() {
             <MetricGroup title="Tasks By Status" metrics={projectStatusMetrics} />
             <MetricGroup title="Tasks By Owner" metrics={projectOwnerMetrics} />
             <MetricGroup title="Tasks By Risk" metrics={projectRiskMetrics} />
-            <MetricGroup title="Engine (24h)" metrics={projectEngineMetrics} />
+            <MetricGroup
+              title="Engine (24h)"
+              metrics={projectEngineMetrics}
+              emptyHint={projectEngineMetricsEmptyHint}
+            />
           </section>
 
           <div className="flex flex-wrap items-center gap-2">
