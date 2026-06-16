@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -21,10 +28,17 @@ import {
   EngineJobRecoveryError,
   retryEngineJob,
 } from "@/lib/engine/engine-job-recovery";
+import { executeCreateGitHubIssues } from "@/lib/engine/executors/create-github-issues-executor";
+import { executeImportTasks } from "@/lib/engine/executors/import-tasks-executor";
 import {
   createExecutorRegistryForRepository,
 } from "@/lib/engine/executor-registry";
+import { TaskContextService } from "@/lib/context/task-context-service";
+import { discoverFeatureArtifacts } from "@/lib/features/feature-artifacts";
+import { SpecKitTaskImporter } from "@/lib/importers/spec-kit-task-importer";
+import { defaultAutomationSettings } from "@/lib/policies/automation-policy";
 import { seedProject } from "@/lib/loopboard";
+import type { WorkflowArtifact } from "@/lib/loopboard";
 import {
   resumeWorkflowRunFromEngine,
   startWorkflowRun,
@@ -315,4 +329,302 @@ describe("loop-engine-recovery", () => {
       const retried = retryEngineJobForApi(repository, jobId);
       assert.equal(retried.job.status, "queued");
     }));
+
+  it("keeps import-tasks idempotent after operator retry requeue", () => {
+    const tempDirectory = mkdtempSync(join(tmpdir(), "loop-engine-recovery-import-"));
+    const repoPath = join(tempDirectory, "repo");
+    const contextRoot = join(tempDirectory, "contexts");
+    const featureFolder = join(repoPath, "specs", "checkout");
+    const databasePath = join(tempDirectory, "loopboard.sqlite");
+    const database = new DatabaseSync(databasePath);
+
+    try {
+      mkdirSync(featureFolder, { recursive: true });
+      writeFileSync(
+        join(featureFolder, "tasks.md"),
+        [
+          "# Tasks",
+          "",
+          "- [ ] T001 Add checkout API in `app/api/checkout/route.ts`",
+          "- [ ] T002 Build checkout form in `app/checkout/page.tsx`",
+        ].join("\n"),
+        "utf8",
+      );
+
+      applyMigrations(database);
+      const repository = new LoopBoardRepository(database);
+      const project = repository.createProject({
+        id: "project-recovery-import",
+        name: "Recovery Import",
+        repoPath,
+        specKitRoot: "specs",
+        createdAt: "2026-06-16T08:00:00.000Z",
+      });
+      const discovered = discoverFeatureArtifacts({
+        project,
+        artifactFolderPath: "specs/checkout",
+        status: "tasks-ready",
+      });
+      const feature = repository.createFeature({
+        id: "feature-recovery-import",
+        projectId: project.id,
+        name: "Checkout Flow",
+        source: "spec-kit",
+        status: "tasks-ready",
+        ...discovered,
+        createdAt: "2026-06-16T08:10:00.000Z",
+      });
+
+      const workflow = repository.createWorkflow({
+        id: "workflow-recovery-import",
+        projectId: project.id,
+        name: "Recovery Import",
+        description: "Import retry workflow.",
+        nodes: [
+          {
+            id: "node-import-tasks",
+            type: "import-tasks",
+            name: "Import Tasks",
+            mode: "auto",
+            position: { x: 0, y: 0 },
+            inputArtifacts: [],
+            outputArtifacts: [],
+            requireApproval: false,
+            maxRetries: 0,
+            riskPolicy: "low",
+            config: {},
+            currentState: "idle",
+          },
+        ],
+        edges: [],
+      });
+      repository.createWorkflowRun({
+        id: "workflow-run-import-retry",
+        workflowId: workflow.id,
+        featureId: feature.id,
+        status: "running",
+        currentNodeId: "node-import-tasks",
+      });
+
+      const inputArtifacts: WorkflowArtifact[] = [
+        { name: "tasks", path: "specs/checkout/tasks.md", required: true },
+      ];
+      const outputArtifacts: WorkflowArtifact[] = [
+        {
+          name: "loopboard-tasks",
+          path: "loopboard://feature/{feature}/tasks",
+          required: true,
+        },
+      ];
+      const importer = new SpecKitTaskImporter(
+        repository,
+        new TaskContextService(contextRoot),
+      );
+
+      const failedJob = repository.createEngineJob({
+        id: "engine-job-import-retry",
+        kind: "workflow-step",
+        backend: "stub",
+        projectId: project.id,
+        workflowRunId: "workflow-run-import-retry",
+        workflowNodeId: "node-import-tasks",
+        status: "failed",
+        payload: { nodeType: "import-tasks", featureId: feature.id },
+        attempt: 1,
+        maxAttempts: 3,
+        error: "Transient import failure.",
+        queuedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+      });
+
+      const first = executeImportTasks({
+        repository,
+        featureId: feature.id,
+        inputArtifacts,
+        outputArtifacts,
+        importer,
+      });
+      assert.equal(first.success, true);
+      assert.equal(first.result?.importedCount, 2);
+
+      const retried = retryEngineJob(repository, failedJob.id);
+      assert.equal(retried.status, "queued");
+
+      const second = executeImportTasks({
+        repository,
+        featureId: feature.id,
+        inputArtifacts,
+        outputArtifacts,
+        importer,
+      });
+      assert.equal(second.success, true);
+      assert.equal(second.result?.importedCount, 0);
+      assert.equal(second.result?.skippedCount, 2);
+
+      const tasks = repository
+        .listBoardData(project.id)
+        .tasks.filter((task) => task.featureId === feature.id);
+      assert.equal(tasks.length, 2);
+      assert.ok(existsSync(join(contextRoot, tasks[0]?.id ?? "", "task.md")));
+      assert.ok(readFileSync(join(contextRoot, tasks[0]?.id ?? "", "task.md"), "utf8").length > 0);
+    } finally {
+      database.close();
+      rmSync(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps create-github-issues idempotent after operator retry requeue", async () => {
+    const tempDirectory = mkdtempSync(join(tmpdir(), "loop-engine-recovery-github-"));
+    const repoPath = join(tempDirectory, "repo");
+    const databasePath = join(tempDirectory, "loopboard.sqlite");
+    const database = new DatabaseSync(databasePath);
+
+    try {
+      mkdirSync(repoPath, { recursive: true });
+      applyMigrations(database);
+      const repository = new LoopBoardRepository(database);
+      const project = repository.createProject({
+        id: "project-recovery-github",
+        name: "Recovery GitHub",
+        repoPath,
+        specKitRoot: "specs",
+        githubRepository: "bank-p/loop-control-plane",
+        automationPolicy: {
+          allowLowRiskAutoIssueCreation: true,
+          allowLowRiskAutoAoReadyLabeling: false,
+          mediumRiskRequiresReview: true,
+          highRiskManualOnly: true,
+        },
+        createdAt: "2026-06-16T08:00:00.000Z",
+      });
+      const feature = repository.createFeature({
+        id: "feature-recovery-github",
+        projectId: project.id,
+        name: "Checkout Flow",
+        source: "manual",
+        status: "tasks-ready",
+        createdAt: "2026-06-16T08:10:00.000Z",
+      });
+      repository.createTask({
+        id: "task-recovery-github",
+        projectId: project.id,
+        featureId: feature.id,
+        title: "Polish sidebar spacing",
+        description: "Adjust padding on the settings sidebar panel.",
+        status: "ready",
+        owner: "ai",
+        mode: "execute",
+        risk: "low",
+        source: "manual",
+        createdAt: "2026-06-16T08:20:00.000Z",
+      });
+
+      const workflow = repository.createWorkflow({
+        id: "workflow-recovery-github",
+        projectId: project.id,
+        name: "Recovery GitHub",
+        description: "GitHub issue retry workflow.",
+        nodes: [
+          {
+            id: "node-create-github-issues",
+            type: "create-github-issues",
+            name: "Create GitHub Issues",
+            mode: "auto",
+            position: { x: 0, y: 0 },
+            inputArtifacts: [],
+            outputArtifacts: [],
+            requireApproval: false,
+            maxRetries: 0,
+            riskPolicy: "low",
+            config: {},
+            currentState: "idle",
+          },
+        ],
+        edges: [],
+      });
+      repository.createWorkflowRun({
+        id: "workflow-run-github-retry",
+        workflowId: workflow.id,
+        featureId: feature.id,
+        status: "running",
+        currentNodeId: "node-create-github-issues",
+      });
+
+      const outputArtifacts: WorkflowArtifact[] = [
+        {
+          name: "github-issues",
+          path: "https://github.com/{repository}/issues",
+          required: true,
+        },
+      ];
+      let createCalls = 0;
+      const createIssue = async ({ title }: { title: string }) => {
+        createCalls += 1;
+        return {
+          status: "created" as const,
+          repository: "bank-p/loop-control-plane",
+          message: `Created GitHub issue for ${title}.`,
+          issueNumber: 42,
+          issueUrl: "https://github.com/bank-p/loop-control-plane/issues/42",
+          labels: ["loopboard", "risk-low"],
+          createdAt: "2026-06-16T00:00:00.000Z",
+        };
+      };
+
+      const failedJob = repository.createEngineJob({
+        id: "engine-job-github-retry",
+        kind: "workflow-step",
+        backend: "stub",
+        projectId: project.id,
+        workflowRunId: "workflow-run-github-retry",
+        workflowNodeId: "node-create-github-issues",
+        status: "failed",
+        payload: { nodeType: "create-github-issues", featureId: feature.id },
+        attempt: 1,
+        maxAttempts: 3,
+        error: "Transient GitHub API failure.",
+        queuedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+      });
+
+      const first = await executeCreateGitHubIssues({
+        repository,
+        featureId: feature.id,
+        workflowRunId: "workflow-run-github-retry",
+        outputArtifacts,
+        token: "token",
+        automationSettings: {
+          ...defaultAutomationSettings,
+          globalAutoRunEnabled: true,
+        },
+        createIssue,
+      });
+      assert.equal(first.success, true);
+      assert.equal(first.result?.createdCount, 1);
+      assert.equal(createCalls, 1);
+
+      const retried = retryEngineJob(repository, failedJob.id);
+      assert.equal(retried.status, "queued");
+
+      const second = await executeCreateGitHubIssues({
+        repository,
+        featureId: feature.id,
+        workflowRunId: "workflow-run-github-retry",
+        outputArtifacts,
+        token: "token",
+        automationSettings: {
+          ...defaultAutomationSettings,
+          globalAutoRunEnabled: true,
+        },
+        createIssue,
+      });
+      assert.equal(second.success, true);
+      assert.equal(second.result?.createdCount, 0);
+      assert.equal(second.result?.skippedExistingCount, 1);
+      assert.equal(createCalls, 1);
+    } finally {
+      database.close();
+      rmSync(tempDirectory, { recursive: true, force: true });
+    }
+  });
 });
