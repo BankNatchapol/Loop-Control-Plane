@@ -129,9 +129,9 @@ Shared helpers: `workflow-artifact-paths.ts` (placeholder resolution, `markWorkf
 
 External and GitHub-derived output artifacts are tagged with `[external/untrusted]` in `description` per [[Security-Policy]].
 
-The workflow runner enqueues `workflow-step` engine jobs for `spec-kit-actions` and `import-tasks` when automation policy allows (including after human approval on semi nodes). Steps enter `running` status until engine completion hooks advance the graph (see [[Loop-Execution-Engine]] integration task). Delivery executors (`create-github-issues`, `open-pr`, `run-tests`, `ai-review`) are wired in `workflow-step-dispatcher.ts` and will be runner-delegated in the integration task.
+The workflow runner enqueues `workflow-step` engine jobs for all delegated node types (`spec-kit-actions`, `import-tasks`, `create-github-issues`, `open-pr`, `run-tests`, `ai-review`) when automation policy allows (including after human approval on semi nodes). Steps enter `running` status until `LoopScheduler.tick` completes the job and calls `completeWorkflowStepFromEngineJob`, which links artifacts, appends events, and advances the graph (including conditional edges via `branchLabel`).
 
-`LoopScheduler` registers `createExecutorRegistryForRepository(repository)` so dequeued workflow-step jobs invoke the dispatcher instead of stub-only completion.
+`LoopScheduler` registers `createExecutorRegistryForRepository(repository)` so dequeued workflow-step jobs invoke the dispatcher instead of stub-only completion, then applies runner completion hooks on terminal job outcomes.
 
 Tests: `tests/spec-kit-actions-executor.test.ts`, `tests/import-tasks-executor.test.ts`, `tests/create-github-issues-executor.test.ts`, `tests/open-pr-executor.test.ts`, `tests/run-tests-executor.test.ts`, `tests/ai-review-executor.test.ts`.
 

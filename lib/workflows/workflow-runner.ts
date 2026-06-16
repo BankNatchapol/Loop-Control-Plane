@@ -1,8 +1,12 @@
 import type { LoopBoardRepository } from "@/lib/db/loopboard-repository";
 import { UnsupportedTransitionError, ValidationError } from "@/lib/db/loopboard-repository";
+import type { EngineJob } from "@/lib/engine/loop-engine-types";
 import { resolveWorkflowNodeExecutorConfig } from "@/lib/engine/workflow-node-config";
 import { resolveWorkflowArtifactPath } from "@/lib/engine/executors/workflow-artifact-paths";
-import { isEngineDelegatedWorkflowNode } from "@/lib/engine/executors/workflow-step-types";
+import {
+  isEngineDelegatedWorkflowNode,
+  parseWorkflowArtifacts,
+} from "@/lib/engine/executors/workflow-step-types";
 import type {
   Workflow,
   WorkflowArtifact,
@@ -145,8 +149,31 @@ const firstRunnableNodeId = (workflow: Workflow): string | undefined => {
   )?.id;
 };
 
-const nextNodeId = (workflow: Workflow, nodeId: string): string | undefined =>
-  workflow.edges.find((edge) => edge.sourceNodeId === nodeId)?.targetNodeId;
+const normalizeBranchLabel = (label: string): string => label.trim().toLowerCase();
+
+const nextNodeId = (
+  workflow: Workflow,
+  nodeId: string,
+  branchLabel?: string,
+): string | undefined => {
+  const outgoing = workflow.edges.filter((edge) => edge.sourceNodeId === nodeId);
+  if (outgoing.length === 0) {
+    return undefined;
+  }
+
+  if (branchLabel) {
+    const normalized = normalizeBranchLabel(branchLabel);
+    const matched = outgoing.find(
+      (edge) => normalizeBranchLabel(edge.label) === normalized,
+    );
+    if (matched) {
+      return matched.targetNodeId;
+    }
+  }
+
+  const unlabeled = outgoing.find((edge) => edge.label.trim().length === 0);
+  return (unlabeled ?? outgoing[0])?.targetNodeId;
+};
 
 const findCurrentNode = (workflow: Workflow, run: WorkflowRun): WorkflowNode => {
   const nodeId = run.currentNodeId ?? firstRunnableNodeId(workflow);
@@ -283,14 +310,16 @@ const updateAfterNode = ({
   run,
   node,
   logs,
+  branchLabel,
 }: {
   repository: LoopBoardRepository;
   workflow: Workflow;
   run: WorkflowRun;
   node: WorkflowNode;
   logs: WorkflowLogEntry[];
+  branchLabel?: string;
 }): WorkflowRun => {
-  const nextId = nextNodeId(workflow, node.id);
+  const nextId = nextNodeId(workflow, node.id, branchLabel);
   const now = new Date().toISOString();
 
   return repository.updateWorkflowRun(run.id, {
@@ -300,10 +329,146 @@ const updateAfterNode = ({
       logs,
       "info",
       nextId ? `Workflow advanced to ${nextId}.` : "Workflow run completed.",
-      { nodeId: node.id, nextNodeId: nextId ?? null },
+      {
+        nodeId: node.id,
+        nextNodeId: nextId ?? null,
+        branchLabel: branchLabel ?? null,
+      },
     ),
     completedAt: nextId ? null : now,
     updatedAt: now,
+  });
+};
+
+export type CompleteWorkflowStepFromEngineJobInput = {
+  repository: LoopBoardRepository;
+  job: EngineJob;
+  success: boolean;
+  error?: string;
+  outputArtifacts?: WorkflowArtifact[];
+  branchLabel?: string;
+};
+
+export const completeWorkflowStepFromEngineJob = ({
+  repository,
+  job,
+  success,
+  error,
+  outputArtifacts,
+  branchLabel,
+}: CompleteWorkflowStepFromEngineJobInput): WorkflowRun | undefined => {
+  if (
+    job.kind !== "workflow-step" ||
+    !job.workflowRunId ||
+    !job.workflowNodeId
+  ) {
+    return undefined;
+  }
+
+  const run = repository.getWorkflowRun(job.workflowRunId);
+  if (run.status === "completed" || run.status === "failed" || run.status === "cancelled") {
+    return run;
+  }
+
+  const workflow = repository.getWorkflow(run.workflowId);
+  const node = workflow.nodes.find((candidate) => candidate.id === job.workflowNodeId);
+  if (!node) {
+    return undefined;
+  }
+
+  const existingStep = latestStepForNode(run, node.id);
+  if (!existingStep || existingStep.status !== "running") {
+    return run;
+  }
+
+  const now = new Date().toISOString();
+  const resolvedBranchLabel =
+    branchLabel ??
+    (typeof job.result?.branchLabel === "string" ? job.result.branchLabel : undefined);
+  const resolvedOutputs =
+    (outputArtifacts && outputArtifacts.length > 0 ? outputArtifacts : undefined) ??
+    parseWorkflowArtifacts(job.result?.outputArtifacts) ??
+    node.outputArtifacts.map((artifact) =>
+      resolveArtifactPath({ artifact, workflow, run }),
+    );
+
+  if (!success) {
+    const failureMessage = redact(error ?? job.error ?? "Engine workflow step failed.");
+    const failedRun = repository.upsertWorkflowRunStep(run.id, {
+      id: existingStep.id,
+      workflowNodeId: node.id,
+      status: "failed",
+      attempt: existingStep.attempt,
+      inputArtifacts: existingStep.inputArtifacts,
+      outputArtifacts: existingStep.outputArtifacts,
+      executionLogs: appendLog(
+        existingStep.executionLogs,
+        "error",
+        `${node.name} failed after engine job ${job.id}: ${failureMessage}`,
+        { nodeId: node.id, engineJobId: job.id },
+      ),
+      error: failureMessage,
+      requireApproval: existingStep.requireApproval,
+      approvedAt: existingStep.approvedAt,
+      startedAt: existingStep.startedAt,
+      completedAt: now,
+      updatedAt: now,
+    });
+
+    return repository.updateWorkflowRun(run.id, {
+      status: "failed",
+      currentNodeId: node.id,
+      executionLogs: appendLog(failedRun.executionLogs, "error", failureMessage, {
+        nodeId: node.id,
+        engineJobId: job.id,
+      }),
+      completedAt: now,
+      updatedAt: now,
+    });
+  }
+
+  const steppedRun = repository.upsertWorkflowRunStep(run.id, {
+    id: existingStep.id,
+    workflowNodeId: node.id,
+    status: "completed",
+    attempt: existingStep.attempt,
+    inputArtifacts: existingStep.inputArtifacts,
+    outputArtifacts: resolvedOutputs,
+    executionLogs: appendLog(
+      existingStep.executionLogs,
+      "info",
+      `${node.name} completed via engine job ${job.id}.`,
+      {
+        nodeId: node.id,
+        engineJobId: job.id,
+        branchLabel: resolvedBranchLabel ?? null,
+      },
+    ),
+    requireApproval: existingStep.requireApproval,
+    approvedAt: existingStep.approvedAt,
+    startedAt: existingStep.startedAt,
+    completedAt: now,
+    updatedAt: now,
+  });
+  const completedStep = steppedRun.steps.find((candidate) => candidate.id === existingStep.id);
+
+  if (completedStep) {
+    linkCompletedStepToContext({
+      repository,
+      workflow,
+      run: steppedRun,
+      node,
+      step: completedStep,
+    });
+  }
+
+  return updateAfterNode({
+    repository,
+    workflow,
+    run: steppedRun,
+    node,
+    logs: steppedRun.executionLogs,
+    branchLabel: resolvedBranchLabel,
   });
 };
 

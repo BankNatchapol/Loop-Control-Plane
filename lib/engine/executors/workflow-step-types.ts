@@ -24,6 +24,10 @@ export type WorkflowStepExecutorResult = {
 export const ENGINE_DELEGATED_WORKFLOW_NODE_TYPES = [
   "spec-kit-actions",
   "import-tasks",
+  "create-github-issues",
+  "open-pr",
+  "run-tests",
+  "ai-review",
 ] as const;
 
 export type EngineDelegatedWorkflowNodeType =
@@ -51,6 +55,20 @@ const isWorkflowArtifact = (value: unknown): value is WorkflowArtifact =>
   typeof value.name === "string" &&
   typeof value.path === "string" &&
   typeof value.required === "boolean";
+
+export const parseWorkflowArtifacts = (
+  value: unknown,
+): WorkflowArtifact[] | undefined => {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  if (!value.every(isWorkflowArtifact)) {
+    return undefined;
+  }
+
+  return value;
+};
 
 export const parseWorkflowStepJobPayload = (
   payload: Record<string, unknown>,

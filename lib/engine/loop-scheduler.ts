@@ -21,6 +21,9 @@ import {
   type PolicyDecision,
 } from "@/lib/policies/automation-policy";
 import { redactSensitiveText } from "@/lib/security/safe-context";
+import {
+  completeWorkflowStepFromEngineJob,
+} from "@/lib/workflows/workflow-runner";
 
 export type SchedulerAction = "start" | "stop" | "pause";
 
@@ -394,6 +397,18 @@ export class LoopScheduler {
       completedAt: outcome.completedAt ?? null,
       updatedAt: now,
     });
+
+    if (
+      job.kind === "workflow-step" &&
+      (outcome.status === "completed" || outcome.status === "failed")
+    ) {
+      completeWorkflowStepFromEngineJob({
+        repository: this.repository,
+        job,
+        success: outcome.status === "completed",
+        error: outcome.error,
+      });
+    }
 
     const schedulerStatusAfterTick = this.repository.updateEngineSchedulerStatus({
       lastTickAt: now,

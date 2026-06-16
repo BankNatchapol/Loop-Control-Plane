@@ -14,6 +14,7 @@ import {
 import { seedFeatures, seedProject, seedTasks, seedWorkflows } from "@/lib/loopboard";
 import {
   approveWorkflowRunStep,
+  completeWorkflowStepFromEngineJob,
   failWorkflowRunStep,
   runNextWorkflowStep,
   startWorkflowRun,
@@ -108,13 +109,41 @@ describe("Workflow runner", () => {
         repository,
         input: { workflowId: workflow.id, featureId: seedTasks[0].featureId },
       });
-      const completed = runNextWorkflowStep({ repository, runId: run.id });
+      const delegated = runNextWorkflowStep({ repository, runId: run.id });
+      assert.equal(delegated.status, "running");
+      assert.equal(delegated.steps[0]?.status, "running");
+
+      const job = repository
+        .listEngineJobs()
+        .find((entry) => entry.workflowRunId === run.id);
+      assert.ok(job);
+
+      const completed = completeWorkflowStepFromEngineJob({
+        repository,
+        job: {
+          ...job!,
+          status: "completed",
+          result: {
+            outputArtifacts: [
+              {
+                name: "task-report",
+                path: `loopboard://tasks/${seedTasks[0].id}/runs/${run.id}/report`,
+                required: true,
+              },
+            ],
+          },
+        },
+        success: true,
+      });
       const task = repository.getTask(seedTasks[0].id);
 
-      assert.equal(completed.status, "completed");
-      assert.equal(task.events.at(-1)?.type, "WORKFLOW_STEP_COMPLETED");
-      assert.equal(task.events.at(-1)?.metadata?.workflowRunId, run.id);
-      assert.equal(task.events.at(-1)?.metadata?.workflowNodeId, "node-task-output");
+      assert.ok(completed);
+      assert.equal(completed?.status, "completed");
+      assert.equal(
+        task.events.filter((event) => event.type === "WORKFLOW_STEP_COMPLETED").at(-1)
+          ?.metadata?.workflowRunId,
+        run.id,
+      );
     });
   });
 
@@ -200,19 +229,63 @@ describe("Workflow runner", () => {
 
       const first = runNextWorkflowStep({ repository, runId: run.id });
       assert.equal(first.status, "running");
-      assert.equal(first.currentNodeId, "node-disabled");
-      assert.equal(first.steps[0]?.status, "completed");
-      assert.match(first.steps[0]?.outputArtifacts[0]?.path ?? "", new RegExp(run.id));
+      assert.equal(first.currentNodeId, "node-auto-a");
+      assert.equal(first.steps[0]?.status, "running");
+
+      const firstJob = repository
+        .listEngineJobs()
+        .find((entry) => entry.workflowRunId === run.id);
+      assert.ok(firstJob);
+
+      const afterFirst = completeWorkflowStepFromEngineJob({
+        repository,
+        job: {
+          ...firstJob!,
+          status: "completed",
+          result: {
+            outputArtifacts: [
+              {
+                name: "test-report",
+                path: `loopboard://runs/${run.id}/test-report`,
+                required: true,
+              },
+            ],
+          },
+        },
+        success: true,
+      });
+      assert.equal(afterFirst?.status, "running");
+      assert.equal(afterFirst?.currentNodeId, "node-disabled");
+      assert.equal(afterFirst?.steps[0]?.status, "completed");
+      assert.match(afterFirst?.steps[0]?.outputArtifacts[0]?.path ?? "", new RegExp(run.id));
 
       const skipped = runNextWorkflowStep({ repository, runId: run.id });
       assert.equal(skipped.status, "running");
       assert.equal(skipped.currentNodeId, "node-auto-c");
       assert.equal(skipped.steps.at(-1)?.status, "skipped");
 
-      const completed = runNextWorkflowStep({ repository, runId: run.id });
-      assert.equal(completed.status, "completed");
-      assert.equal(completed.currentNodeId, undefined);
-      assert.equal(completed.steps.at(-1)?.status, "completed");
+      const delegated = runNextWorkflowStep({ repository, runId: run.id });
+      assert.equal(delegated.status, "running");
+      assert.equal(delegated.currentNodeId, "node-auto-c");
+      assert.equal(delegated.steps.at(-1)?.status, "running");
+
+      const lastJob = repository
+        .listEngineJobs()
+        .find(
+          (entry) =>
+            entry.workflowRunId === run.id &&
+            entry.workflowNodeId === "node-auto-c",
+        );
+      assert.ok(lastJob);
+
+      const completed = completeWorkflowStepFromEngineJob({
+        repository,
+        job: { ...lastJob!, status: "completed", result: {} },
+        success: true,
+      });
+      assert.equal(completed?.status, "completed");
+      assert.equal(completed?.currentNodeId, undefined);
+      assert.equal(completed?.steps.at(-1)?.status, "completed");
     });
   });
 
@@ -384,6 +457,99 @@ describe("Workflow runner", () => {
         .filter((job) => job.workflowRunId === run.id);
       assert.equal(jobs.length, 1);
       assert.equal(jobs[0]?.payload.nodeType, "import-tasks");
+    });
+  });
+
+  it("follows conditional edges using branchLabel from engine completion", () => {
+    withRepository((repository) => {
+      repository.updateAutomationSettings({ globalAutoRunEnabled: true });
+      const workflow = repository.createWorkflow({
+        id: "workflow-branch-label",
+        projectId: seedProject.id,
+        name: "Branch Label Routing",
+        description: "Routes ai-review to different nodes by branchLabel.",
+        nodes: [
+          {
+            id: "node-ai-review-branch",
+            type: "ai-review",
+            name: "AI Review",
+            mode: "auto",
+            position: { x: 0, y: 0 },
+            inputArtifacts: [],
+            outputArtifacts: [],
+            requireApproval: false,
+            maxRetries: 0,
+            riskPolicy: "low",
+            config: {},
+            currentState: "idle",
+          },
+          {
+            id: "node-approved",
+            type: "open-pr",
+            name: "Open PR",
+            mode: "disabled",
+            position: { x: 220, y: 0 },
+            inputArtifacts: [],
+            outputArtifacts: [],
+            requireApproval: false,
+            maxRetries: 0,
+            riskPolicy: "low",
+            config: {},
+            currentState: "idle",
+          },
+          {
+            id: "node-needs-changes",
+            type: "manual-claude-code-edit",
+            name: "Manual Edit",
+            mode: "disabled",
+            position: { x: 220, y: 120 },
+            inputArtifacts: [],
+            outputArtifacts: [],
+            requireApproval: false,
+            maxRetries: 0,
+            riskPolicy: "low",
+            config: {},
+            currentState: "idle",
+          },
+        ],
+        edges: [
+          {
+            id: "edge-approved",
+            sourceNodeId: "node-ai-review-branch",
+            targetNodeId: "node-approved",
+            label: "approved",
+            condition: {},
+          },
+          {
+            id: "edge-needs-changes",
+            sourceNodeId: "node-ai-review-branch",
+            targetNodeId: "node-needs-changes",
+            label: "needs changes",
+            condition: {},
+          },
+        ],
+      });
+      const run = startWorkflowRun({
+        repository,
+        input: { workflowId: workflow.id },
+      });
+      runNextWorkflowStep({ repository, runId: run.id });
+      const job = repository
+        .listEngineJobs()
+        .find((entry) => entry.workflowRunId === run.id);
+      assert.ok(job);
+
+      const approvedPath = completeWorkflowStepFromEngineJob({
+        repository,
+        job: {
+          ...job!,
+          status: "completed",
+          result: { branchLabel: "approved" },
+        },
+        success: true,
+        branchLabel: "approved",
+      });
+      assert.equal(approvedPath?.currentNodeId, "node-approved");
     });
   });
 });

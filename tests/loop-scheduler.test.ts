@@ -9,6 +9,7 @@ import { applyMigrations } from "@/db/migrate";
 import { seedDatabase } from "@/db/seed";
 import { LoopBoardRepository } from "@/lib/db/loopboard-repository";
 import {
+  createExecutorRegistryForRepository,
   ExecutorRegistry,
   StubExecutor,
 } from "@/lib/engine/executor-registry";
@@ -26,6 +27,10 @@ import {
   evaluateGlobalAutomationPolicy,
 } from "@/lib/policies/automation-policy";
 import { seedProject } from "@/lib/loopboard";
+import {
+  runNextWorkflowStep,
+  startWorkflowRun,
+} from "@/lib/workflows/workflow-runner";
 
 const sampleJob = (
   overrides: Partial<EngineJob> = {},
@@ -313,6 +318,64 @@ describe("Loop scheduler service", () => {
       const second = await scheduler.tick({ mode: "manual" });
       assert.equal(second.job?.status, "failed");
       assert.equal(second.job?.attempt, 3);
+    });
+  });
+
+  it("advances workflow runs after workflow-step jobs complete", async () => {
+    await withRepository(async (repository) => {
+      repository.updateAutomationSettings({ globalAutoRunEnabled: true });
+      const workflow = repository.createWorkflow({
+        id: "workflow-engine-step",
+        projectId: seedProject.id,
+        name: "Engine Step Integration",
+        description: "Completes ai-review via scheduler tick.",
+        nodes: [
+          {
+            id: "node-ai-review-engine",
+            type: "ai-review",
+            name: "AI Review",
+            mode: "auto",
+            position: { x: 0, y: 0 },
+            inputArtifacts: [],
+            outputArtifacts: [
+              {
+                name: "review-notes",
+                path: "loopboard://runs/{run}/review-notes",
+                required: true,
+              },
+            ],
+            requireApproval: false,
+            maxRetries: 0,
+            riskPolicy: "low",
+            config: {},
+            currentState: "idle",
+          },
+        ],
+        edges: [],
+      });
+      const run = startWorkflowRun({
+        repository,
+        input: { workflowId: workflow.id },
+      });
+      runNextWorkflowStep({ repository, runId: run.id });
+
+      const scheduler = new LoopScheduler(
+        repository,
+        createExecutorRegistryForRepository(repository),
+      );
+      const result = await scheduler.tick({ mode: "manual" });
+
+      assert.equal(result.plan.action, "process");
+      assert.equal(result.job?.status, "completed");
+      assert.equal(result.job?.kind, "workflow-step");
+
+      const updatedRun = repository.getWorkflowRun(run.id);
+      assert.equal(updatedRun.status, "completed");
+      assert.equal(updatedRun.steps[0]?.status, "completed");
+      assert.match(
+        updatedRun.steps[0]?.outputArtifacts[0]?.path ?? "",
+        /review-notes/u,
+      );
     });
   });
 });
