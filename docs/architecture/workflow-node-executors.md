@@ -111,6 +111,24 @@ Helpers: `ProcessRunner`, `runProcessProfile`, `assertProcessRunPolicyAllowed`, 
 
 Tests: `tests/process-runner.test.ts`.
 
+## Workflow Step Executors
+
+Phase 03 adds real executors for planning nodes under `lib/engine/executors/`:
+
+| Module | Node type | Behavior |
+|--------|-----------|----------|
+| `spec-kit-actions-executor.ts` | `spec-kit-actions` | Runs chained Spec Kit CLI actions (`spec`, `plan`, `tasks`) via process-runner; verifies required output files exist |
+| `import-tasks-executor.ts` | `import-tasks` | Calls `SpecKitTaskImporter.importFeature` with resolved `tasks.md` path and feature linkage |
+| `workflow-step-dispatcher.ts` | `workflow-step` jobs | Routes engine jobs to the correct executor by `nodeType` |
+
+Shared helpers: `workflow-artifact-paths.ts` (placeholder resolution), `workflow-step-types.ts` (payload parsing, delegated node types).
+
+The workflow runner enqueues `workflow-step` engine jobs for `spec-kit-actions` and `import-tasks` when automation policy allows (including after human approval on semi nodes). Steps enter `running` status until engine completion hooks advance the graph (see [[Loop-Execution-Engine]] integration task).
+
+`LoopScheduler` registers `createExecutorRegistryForRepository(repository)` so dequeued workflow-step jobs invoke the dispatcher instead of stub-only completion.
+
+Tests: `tests/spec-kit-actions-executor.test.ts`, `tests/import-tasks-executor.test.ts`.
+
 ## Runner vs Engine Boundary
 
 `lib/workflows/workflow-runner.ts` remains the graph state machine. Phase 03 replaces deterministic `"completed deterministically"` completion for automatable nodes by enqueueing `workflow-step` engine jobs (later tasks in this phase). Until those jobs run:

@@ -3,7 +3,7 @@ import {
   type LoopBoardRepository,
 } from "@/lib/db/loopboard-repository";
 import {
-  defaultExecutorRegistry,
+  createExecutorRegistryForRepository,
   resolveExecutorConfigForJob,
   type ExecutorRegistry,
   type ExecutorResult,
@@ -264,7 +264,9 @@ export const processEngineJob = (input: {
 export class LoopScheduler {
   constructor(
     private readonly repository: LoopBoardRepository,
-    private readonly registry: ExecutorRegistry = defaultExecutorRegistry,
+    private readonly registry: ExecutorRegistry = createExecutorRegistryForRepository(
+      repository,
+    ),
   ) {}
 
   getStatus(): EngineSchedulerStatus {

@@ -1,5 +1,8 @@
 import type { LoopBoardRepository } from "@/lib/db/loopboard-repository";
 import { UnsupportedTransitionError, ValidationError } from "@/lib/db/loopboard-repository";
+import { resolveWorkflowNodeExecutorConfig } from "@/lib/engine/workflow-node-config";
+import { resolveWorkflowArtifactPath } from "@/lib/engine/executors/workflow-artifact-paths";
+import { isEngineDelegatedWorkflowNode } from "@/lib/engine/executors/workflow-step-types";
 import type {
   Workflow,
   WorkflowArtifact,
@@ -58,22 +61,82 @@ const appendLog = (
   metadata: WorkflowLogEntry["metadata"] = {},
 ): WorkflowLogEntry[] => [...logs, logEntry(level, message, metadata)];
 
-const resolveArtifactPath = ({
-  artifact,
+const resolveArtifactPath = resolveWorkflowArtifactPath;
+
+const enqueueEngineDelegatedWorkflowStep = ({
+  repository,
   workflow,
   run,
+  node,
+  existingStep,
+  approvedAt,
 }: {
-  artifact: WorkflowArtifact;
+  repository: LoopBoardRepository;
   workflow: Workflow;
   run: WorkflowRun;
-}): WorkflowArtifact => ({
-  ...artifact,
-  path: artifact.path
-    .replaceAll("{run}", run.id)
-    .replaceAll("{feature}", run.featureId ?? "project")
-    .replaceAll("{repository}", workflow.projectId)
-    .replaceAll("{defaultBranch}", "default"),
-});
+  node: WorkflowNode;
+  existingStep?: WorkflowRunStep;
+  approvedAt?: string;
+}): WorkflowRun => {
+  const now = new Date().toISOString();
+  const attempt = (existingStep?.attempt ?? 0) + 1;
+  const executorConfig = resolveWorkflowNodeExecutorConfig(node);
+  const inputArtifacts = node.inputArtifacts.map((artifact) =>
+    resolveArtifactPath({ artifact, workflow, run }),
+  );
+  const outputArtifacts = node.outputArtifacts.map((artifact) =>
+    resolveArtifactPath({ artifact, workflow, run }),
+  );
+
+  const job = repository.createEngineJob({
+    kind: "workflow-step",
+    backend: executorConfig.backend,
+    projectId: run.projectId,
+    workflowRunId: run.id,
+    workflowNodeId: node.id,
+    maxAttempts: Math.max(node.maxRetries + 1, 1),
+    payload: {
+      workflowRunId: run.id,
+      workflowNodeId: node.id,
+      nodeType: node.type,
+      featureId: run.featureId,
+      executor: executorConfig,
+      inputArtifacts,
+      outputArtifacts,
+    },
+    executionLogs: [
+      {
+        timestamp: now,
+        level: "info",
+        message: `Workflow step "${node.name}" enqueued for engine execution.`,
+        metadata: {
+          workflowRunId: run.id,
+          workflowNodeId: node.id,
+          nodeType: node.type,
+        },
+      },
+    ],
+  });
+
+  return repository.upsertWorkflowRunStep(run.id, {
+    id: existingStep?.id,
+    workflowNodeId: node.id,
+    status: "running",
+    attempt,
+    inputArtifacts,
+    outputArtifacts: [],
+    executionLogs: appendLog(
+      existingStep?.executionLogs ?? stepLogsForNode({ node, action: "enqueued engine job" }),
+      "info",
+      `${node.name} enqueued engine job ${job.id}.`,
+      { nodeId: node.id, engineJobId: job.id, nodeType: node.type },
+    ),
+    requireApproval: existingStep?.requireApproval ?? node.requireApproval,
+    approvedAt: approvedAt ?? existingStep?.approvedAt,
+    startedAt: existingStep?.startedAt ?? now,
+    updatedAt: now,
+  });
+};
 
 const firstRunnableNodeId = (workflow: Workflow): string | undefined => {
   const targetIds = new Set(workflow.edges.map((edge) => edge.targetNodeId));
@@ -317,6 +380,12 @@ export const runNextWorkflowStep = ({
   const now = new Date().toISOString();
   const existingStep = latestStepForNode(run, node.id);
 
+  if (existingStep?.status === "running") {
+    throw new UnsupportedTransitionError(
+      "Wait for the running engine job to finish before running the next step.",
+    );
+  }
+
   if (existingStep?.status === "waiting-approval") {
     throw new UnsupportedTransitionError(
       "Approve the waiting workflow step before running the next step.",
@@ -387,6 +456,28 @@ export const runNextWorkflowStep = ({
     });
   }
 
+  if (isEngineDelegatedWorkflowNode(node.type)) {
+    const delegatedRun = enqueueEngineDelegatedWorkflowStep({
+      repository,
+      workflow,
+      run,
+      node,
+      existingStep,
+    });
+
+    return repository.updateWorkflowRun(run.id, {
+      status: "running",
+      currentNodeId: node.id,
+      executionLogs: appendLog(
+        delegatedRun.executionLogs,
+        "info",
+        `Engine job queued for ${node.name}.`,
+        { nodeId: node.id, nodeType: node.type },
+      ),
+      updatedAt: now,
+    });
+  }
+
   const outputArtifacts = node.outputArtifacts.map((artifact) =>
     resolveArtifactPath({ artifact, workflow, run }),
   );
@@ -447,6 +538,30 @@ export const approveWorkflowRunStep = ({
   const outputArtifacts = node.outputArtifacts.map((artifact) =>
     resolveArtifactPath({ artifact, workflow, run }),
   );
+
+  if (isEngineDelegatedWorkflowNode(node.type)) {
+    const delegatedRun = enqueueEngineDelegatedWorkflowStep({
+      repository,
+      workflow,
+      run,
+      node,
+      existingStep: step,
+      approvedAt: now,
+    });
+
+    return repository.updateWorkflowRun(run.id, {
+      status: "running",
+      currentNodeId: node.id,
+      executionLogs: appendLog(
+        delegatedRun.executionLogs,
+        "info",
+        "Workflow step approved and enqueued for engine execution.",
+        { nodeId: node.id, nodeType: node.type },
+      ),
+      updatedAt: now,
+    });
+  }
+
   const steppedRun = repository.upsertWorkflowRunStep(run.id, {
     id: step.id,
     workflowNodeId: node.id,

@@ -301,4 +301,89 @@ describe("Workflow runner", () => {
       );
     });
   });
+
+  it("enqueues engine jobs for spec-kit-actions after approval instead of completing inline", () => {
+    withRepository((repository) => {
+      const run = startWorkflowRun({
+        repository,
+        input: { workflowId: seedWorkflows[0].id, featureId: seedFeatures[0].id },
+      });
+
+      runNextWorkflowStep({ repository, runId: run.id });
+      approveWorkflowRunStep({ repository, runId: run.id });
+      runNextWorkflowStep({ repository, runId: run.id });
+      const delegated = approveWorkflowRunStep({ repository, runId: run.id });
+
+      assert.equal(delegated.status, "running");
+      assert.equal(delegated.currentNodeId, "node-spec-kit-actions");
+      assert.equal(delegated.steps.at(-1)?.status, "running");
+      assert.match(
+        delegated.steps.at(-1)?.executionLogs.at(-1)?.message ?? "",
+        /enqueued engine job/u,
+      );
+
+      const jobs = repository
+        .listEngineJobs({ status: "queued" })
+        .filter((job) => job.workflowRunId === run.id);
+      assert.equal(jobs.length, 1);
+      assert.equal(jobs[0]?.kind, "workflow-step");
+      assert.equal(jobs[0]?.workflowNodeId, "node-spec-kit-actions");
+      assert.equal(jobs[0]?.payload.nodeType, "spec-kit-actions");
+    });
+  });
+
+  it("enqueues import-tasks engine jobs when auto mode policy allows", () => {
+    withRepository((repository) => {
+      repository.updateAutomationSettings({ globalAutoRunEnabled: true });
+      const workflow = repository.createWorkflow({
+        id: "workflow-import-tasks-auto",
+        projectId: seedProject.id,
+        name: "Import Tasks Auto",
+        description: "Delegates import-tasks to the engine.",
+        nodes: [
+          {
+            id: "node-import-tasks-auto",
+            type: "import-tasks",
+            name: "Import Tasks",
+            mode: "auto",
+            position: { x: 0, y: 0 },
+            inputArtifacts: [
+              {
+                name: "tasks",
+                path: "specs/{feature}/tasks.md",
+                required: true,
+              },
+            ],
+            outputArtifacts: [
+              {
+                name: "loopboard-tasks",
+                path: "loopboard://feature/{feature}/tasks",
+                required: true,
+              },
+            ],
+            requireApproval: false,
+            maxRetries: 1,
+            riskPolicy: "low",
+            config: {},
+            currentState: "idle",
+          },
+        ],
+        edges: [],
+      });
+      const run = startWorkflowRun({
+        repository,
+        input: { workflowId: workflow.id, featureId: seedFeatures[0].id },
+      });
+
+      const delegated = runNextWorkflowStep({ repository, runId: run.id });
+
+      assert.equal(delegated.status, "running");
+      assert.equal(delegated.steps[0]?.status, "running");
+      const jobs = repository
+        .listEngineJobs()
+        .filter((job) => job.workflowRunId === run.id);
+      assert.equal(jobs.length, 1);
+      assert.equal(jobs[0]?.payload.nodeType, "import-tasks");
+    });
+  });
 });

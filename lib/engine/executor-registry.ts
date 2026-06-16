@@ -1,3 +1,5 @@
+import type { LoopBoardRepository } from "@/lib/db/loopboard-repository";
+import { dispatchWorkflowStepJob } from "@/lib/engine/executors/workflow-step-dispatcher";
 import { redactSensitiveText } from "@/lib/security/safe-context";
 
 import {
@@ -78,6 +80,10 @@ const summarizeOutput = (value: string | undefined): string | undefined => {
 
 const activeStubJobs = new Set<string>();
 
+export type StubExecutorOptions = {
+  workflowStepHandler?: (context: ExecutorContext) => Promise<ExecutorResult>;
+};
+
 export class StubExecutor implements Executor {
   readonly backend = "stub" as const;
   readonly supportedJobKinds = [
@@ -86,11 +92,17 @@ export class StubExecutor implements Executor {
     "workflow-step",
   ] as const;
 
+  constructor(private readonly options: StubExecutorOptions = {}) {}
+
   canHandle(backend: ExecutorBackend, jobKind: EngineJobKind): boolean {
     return backend === this.backend && this.supportedJobKinds.includes(jobKind);
   }
 
   async execute(context: ExecutorContext): Promise<ExecutorResult> {
+    if (context.job.kind === "workflow-step" && this.options.workflowStepHandler) {
+      return this.options.workflowStepHandler(context);
+    }
+
     activeStubJobs.add(context.job.id);
 
     const logs: EngineRunLogEntry[] = [
@@ -147,6 +159,16 @@ export class StubExecutor implements Executor {
 }
 
 export const defaultStubExecutor = new StubExecutor();
+
+export const createExecutorRegistryForRepository = (
+  repository: LoopBoardRepository,
+): ExecutorRegistry =>
+  new ExecutorRegistry([
+    new StubExecutor({
+      workflowStepHandler: (context) =>
+        dispatchWorkflowStepJob(context, { repository }),
+    }),
+  ]);
 
 export class ExecutorRegistry {
   private readonly executors = new Map<ExecutorBackend, Executor>();
