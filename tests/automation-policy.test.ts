@@ -189,6 +189,23 @@ describe("Automation policy", () => {
     assert.equal(workflowPolicy.code, "global_auto_run_disabled");
   });
 
+  it("uses project settings for low-risk automated task execution", () => {
+    const projectPolicy = {
+      ...defaultProjectAutomationPolicy,
+      allowLowRiskAutoTaskExecution: false,
+    };
+    const policy = evaluateTaskPolicy({
+      operation: "assign-ai",
+      task: taskWith({ risk: "low" }),
+      automated: true,
+      automationSettings: autoRunEnabled,
+      projectPolicy,
+    });
+
+    assert.equal(policy.kind, "deny");
+    assert.equal(policy.code, "project_blocks_low_risk_auto_task_execution");
+  });
+
   it("uses project settings for low-risk issue and AO-ready automation", () => {
     const projectPolicy = {
       ...defaultProjectAutomationPolicy,

@@ -154,6 +154,42 @@ describe("task loop planner", () => {
     });
   });
 
+  it("blocks automated pickup when project disallows low-risk auto task execution", () => {
+    withRepository((repository) => {
+      repository.updateAutomationSettings({ globalAutoRunEnabled: true });
+
+      const scan = scanTaskLoopCandidates(repository, {
+        projectId: seedProject.id,
+        taskId: "task-local-persistence-reset",
+        automated: true,
+      });
+
+      assert.equal(scan.eligible.length, 0);
+      assert.equal(scan.skipped[0]?.code, "project_blocks_low_risk_auto_task_execution");
+    });
+  });
+
+  it("allows automated pickup when project enables low-risk auto task execution", () => {
+    withRepository((repository) => {
+      repository.updateAutomationSettings({ globalAutoRunEnabled: true });
+      repository.updateProject(seedProject.id, {
+        automationPolicy: {
+          ...seedProject.automationPolicy,
+          allowLowRiskAutoTaskExecution: true,
+        },
+      });
+
+      const scan = scanTaskLoopCandidates(repository, {
+        projectId: seedProject.id,
+        taskId: "task-local-persistence-reset",
+        automated: true,
+      });
+
+      assert.equal(scan.eligible.length, 1);
+      assert.equal(scan.skipped.length, 0);
+    });
+  });
+
   it("repository active task-run lookup finds queued jobs only", () => {
     withRepository((repository) => {
       assert.equal(repository.hasActiveTaskRunJob("task-local-persistence-reset"), false);

@@ -15,7 +15,7 @@ related:
 
 # Risk Policy
 
-LoopBoard gates automation on task risk and explicit human approval. The default posture keeps global auto-run disabled and treats high-risk tasks as manual-only. The central policy service (`lib/policies/automation-policy.ts`) is the single source for all allow/deny/requires-approval decisions used by task actions, workflow nodes, GitHub issue creation, and UI controls.
+Loop Control Plane gates automation on task risk and explicit human approval. The default posture keeps global auto-run disabled and treats high-risk tasks as manual-only. The central policy service (`lib/policies/automation-policy.ts`) is the single source for all allow/deny/requires-approval decisions used by task actions, workflow nodes, GitHub issue creation, and UI controls.
 
 See [[Security-Policy]] for token handling, untrusted context rules, and shell command constraints.
 
@@ -42,7 +42,7 @@ Risk levels are ordered: `low < medium < high < critical`. Effective risk is the
 | `mediumRiskRequiresReview` | `true` — medium-risk automation requires a human review gate |
 | `highRiskManualOnly` | `true` — high and critical risk automation is blocked |
 
-These defaults mean LoopBoard out of the box performs no automated external actions. Every GitHub issue creation, label sync, AO-ready promotion, and workflow node advancement is driven by an explicit human action unless the operator changes the settings.
+These defaults mean Loop Control Plane out of the box performs no automated external actions. Every GitHub issue creation, label sync, AO-ready promotion, and workflow node advancement is driven by an explicit human action unless the operator changes the settings.
 
 ## High-Risk Category Inference
 
@@ -84,6 +84,7 @@ All policy evaluations return a `PolicyDecision` with:
 | `global_auto_run_disabled` | deny | Automated request when `globalAutoRunEnabled` is false |
 | `project_blocks_low_risk_auto_issue_creation` | deny | Automated `create-github-issue` when project flag is off |
 | `project_blocks_low_risk_auto_ao_ready` | deny | Automated `mark-ao-ready` when project flag is off |
+| `project_blocks_low_risk_auto_task_execution` | deny | Automated `assign-ai` / task-loop pickup when project flag is off |
 | `github_issue_required` | deny | AO-ready action without a linked GitHub issue |
 | `ao_ready_approval_required` | requires-approval | Medium/high/critical task without prior AO-ready approval |
 | `medium_risk_review_gate` | requires-approval | Medium-risk automated action when `mediumRiskRequiresReview` is on |
@@ -111,7 +112,7 @@ All policy evaluations return a `PolicyDecision` with:
 
 `assign-ai` is policy-evaluated as a task action. Under default settings it is allowed for any task when `globalAutoRunEnabled` is false and the action is not automated. When global auto-run is enabled:
 
-- Low-risk tasks: allowed.
+- Low-risk tasks: allowed only when `allowLowRiskAutoTaskExecution` is true.
 - Medium-risk tasks with `mediumRiskRequiresReview`: requires approval.
 - High/critical tasks with `highRiskManualOnly`: denied.
 
@@ -152,6 +153,7 @@ Each project stores an `automation_policy` JSON object with:
 |-------|------|---------|
 | `allowLowRiskAutoIssueCreation` | boolean | `false` |
 | `allowLowRiskAutoAoReadyLabeling` | boolean | `false` |
+| `allowLowRiskAutoTaskExecution` | boolean | `false` |
 | `mediumRiskRequiresReview` | boolean | `true` |
 | `highRiskManualOnly` | boolean | `true` |
 
@@ -166,7 +168,7 @@ Policy summaries displayed in the project dashboard and workflow editor list the
 The following are outside the current risk policy scope:
 
 - **Automatic merge** — No risk level permits automatic PR merge. The `merge` workflow node is always human-controlled; see [[Human-Takeover]].
-- **Remote or cloud-based approval workflows** — Approvals are recorded locally in the LoopBoard SQLite database. There is no external approval service, webhook, or notification system.
-- **Fine-grained per-user approval** — LoopBoard has no user identity. AO-ready approvals are operator-level local actions, not attributed to individual users.
+- **Remote or cloud-based approval workflows** — Approvals are recorded locally in the Loop Control Plane SQLite database. There is no external approval service, webhook, or notification system.
+- **Fine-grained per-user approval** — Loop Control Plane has no user identity. AO-ready approvals are operator-level local actions, not attributed to individual users.
 - **Dynamic risk scoring or ML classification** — Risk levels and high-risk category detection use fixed pattern matching. There is no adaptive or learning risk scorer.
 - **Cross-project policy inheritance** — Each project policy is independent. Global auto-run is the only cross-project setting.

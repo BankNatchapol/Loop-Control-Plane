@@ -211,6 +211,7 @@ const emptyProjectForm: ProjectFormState = {
   automationPolicy: {
     allowLowRiskAutoIssueCreation: true,
     allowLowRiskAutoAoReadyLabeling: true,
+    allowLowRiskAutoTaskExecution: false,
     mediumRiskRequiresReview: true,
     highRiskManualOnly: true,
   },
@@ -1472,6 +1473,11 @@ function ProjectForm({
       key: "allowLowRiskAutoAoReadyLabeling",
       label: "Low-risk AO-ready",
       detail: "Allow automatic AO-ready labeling only for low-risk tasks.",
+    },
+    {
+      key: "allowLowRiskAutoTaskExecution",
+      label: "Low-risk auto task loop",
+      detail: "Allow the engine scheduler to pick up and run low-risk Ready tasks.",
     },
     {
       key: "mediumRiskRequiresReview",

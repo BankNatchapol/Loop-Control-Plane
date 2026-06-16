@@ -17,7 +17,9 @@ import {
   LoopScheduler,
   LoopSchedulerError,
   applySchedulerTransition,
+  DEFAULT_TASK_LOOP_CONCURRENCY_LIMIT,
   planNextTick,
+  planTaskLoopPickup,
   processEngineJob,
   redactEngineLogEntry,
 } from "@/lib/engine/loop-scheduler";
@@ -141,6 +143,42 @@ describe("Loop scheduler pure helpers", () => {
         action: "idle",
         reason: "No queued engine jobs are waiting for execution.",
       },
+    );
+  });
+
+  it("plans task loop pickup around scheduler state, policy, and concurrency", () => {
+    const policyAllow = evaluateGlobalAutomationPolicy({
+      globalAutoRunEnabled: true,
+    });
+
+    assert.deepEqual(
+      planTaskLoopPickup({
+        tickMode: "automated",
+        schedulerStatus: schedulerStatus({ status: "running" }),
+        policyDecision: policyAllow,
+        activeTaskRunJobs: 0,
+      }),
+      { shouldEnqueue: true, enqueueLimit: DEFAULT_TASK_LOOP_CONCURRENCY_LIMIT },
+    );
+
+    assert.deepEqual(
+      planTaskLoopPickup({
+        tickMode: "automated",
+        schedulerStatus: schedulerStatus({ status: "running" }),
+        policyDecision: policyAllow,
+        activeTaskRunJobs: 1,
+      }),
+      { shouldEnqueue: false, enqueueLimit: 0 },
+    );
+
+    assert.deepEqual(
+      planTaskLoopPickup({
+        tickMode: "manual",
+        schedulerStatus: schedulerStatus({ status: "running" }),
+        policyDecision: policyAllow,
+        activeTaskRunJobs: 0,
+      }),
+      { shouldEnqueue: false, enqueueLimit: 0 },
     );
   });
 
@@ -376,6 +414,49 @@ describe("Loop scheduler service", () => {
         updatedRun.steps[0]?.outputArtifacts[0]?.path ?? "",
         /review-notes/u,
       );
+    });
+  });
+
+  it("enqueues eligible ready tasks on automated tick when auto-run and project policy allow", async () => {
+    await withRepository(async (repository) => {
+      repository.updateAutomationSettings({ globalAutoRunEnabled: true });
+      repository.updateProject(seedProject.id, {
+        automationPolicy: {
+          ...seedProject.automationPolicy,
+          allowLowRiskAutoTaskExecution: true,
+        },
+      });
+      repository.updateEngineSchedulerStatus({ status: "running" });
+
+      const scheduler = new LoopScheduler(
+        repository,
+        createExecutorRegistryForRepository(repository),
+      );
+      const result = await scheduler.tick({ mode: "automated" });
+
+      assert.equal(result.taskLoopPickup?.enqueued, 1);
+      assert.equal(result.plan.action, "process");
+      assert.equal(result.job?.kind, "task-run");
+      assert.equal(result.job?.taskId, "task-local-persistence-reset");
+    });
+  });
+
+  it("does not enqueue task loop jobs on manual tick", async () => {
+    await withRepository(async (repository) => {
+      repository.updateAutomationSettings({ globalAutoRunEnabled: true });
+      repository.updateProject(seedProject.id, {
+        automationPolicy: {
+          ...seedProject.automationPolicy,
+          allowLowRiskAutoTaskExecution: true,
+        },
+      });
+      repository.updateEngineSchedulerStatus({ status: "running" });
+
+      const scheduler = new LoopScheduler(repository);
+      const result = await scheduler.tick({ mode: "manual" });
+
+      assert.equal(result.taskLoopPickup, undefined);
+      assert.equal(repository.countActiveTaskRunJobs(), 0);
     });
   });
 });

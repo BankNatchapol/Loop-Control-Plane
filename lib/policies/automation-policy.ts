@@ -146,6 +146,9 @@ const automationSettingsReasons = ({
   projectPolicy.allowLowRiskAutoAoReadyLabeling
     ? "Project allows low-risk automatic AO-ready labeling."
     : "Project blocks low-risk automatic AO-ready labeling.",
+  projectPolicy.allowLowRiskAutoTaskExecution
+    ? "Project allows low-risk automatic task execution."
+    : "Project blocks low-risk automatic task execution.",
   projectPolicy.mediumRiskRequiresReview
     ? "Project requires review gates for medium-risk automation."
     : "Project does not require review gates for medium-risk automation.",
@@ -253,6 +256,21 @@ export const evaluateTaskPolicy = ({
       kind: "deny",
       code: "project_blocks_low_risk_auto_ao_ready",
       message: "This project blocks low-risk automatic AO-ready labeling.",
+      reasons: baseReasons,
+      effectiveRisk: risk,
+    });
+  }
+
+  if (
+    automated &&
+    operation === "assign-ai" &&
+    risk === "low" &&
+    !projectPolicy.allowLowRiskAutoTaskExecution
+  ) {
+    return decision({
+      kind: "deny",
+      code: "project_blocks_low_risk_auto_task_execution",
+      message: "This project blocks low-risk automatic task execution.",
       reasons: baseReasons,
       effectiveRisk: risk,
     });

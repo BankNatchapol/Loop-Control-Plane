@@ -24,6 +24,7 @@ import { redactSensitiveText } from "@/lib/security/safe-context";
 import {
   completeWorkflowStepFromEngineJob,
 } from "@/lib/workflows/workflow-runner";
+import { enqueueTaskLoopJobs } from "@/lib/engine/task-loop-planner";
 
 export type SchedulerAction = "start" | "stop" | "pause";
 
@@ -52,6 +53,11 @@ export type TickResult = {
   plan: TickPlan;
   job?: EngineJob;
   schedulerStatus: EngineSchedulerStatus;
+  taskLoopPickup?: {
+    enqueued: number;
+    skipped: number;
+    deduped: number;
+  };
 };
 
 export class LoopSchedulerError extends Error {
@@ -66,6 +72,41 @@ export class LoopSchedulerError extends Error {
 }
 
 const nowIso = (): string => new Date().toISOString();
+
+export const DEFAULT_TASK_LOOP_CONCURRENCY_LIMIT = 1;
+
+export type TaskLoopPickupPlan = {
+  shouldEnqueue: boolean;
+  enqueueLimit: number;
+};
+
+export const planTaskLoopPickup = (input: {
+  tickMode: TickMode;
+  schedulerStatus: EngineSchedulerStatus;
+  policyDecision: PolicyDecision;
+  activeTaskRunJobs: number;
+  concurrencyLimit?: number;
+}): TaskLoopPickupPlan => {
+  const limit = input.concurrencyLimit ?? DEFAULT_TASK_LOOP_CONCURRENCY_LIMIT;
+  const availableSlots = Math.max(0, limit - input.activeTaskRunJobs);
+
+  if (input.tickMode !== "automated") {
+    return { shouldEnqueue: false, enqueueLimit: 0 };
+  }
+
+  if (input.schedulerStatus.status !== "running") {
+    return { shouldEnqueue: false, enqueueLimit: 0 };
+  }
+
+  if (input.policyDecision.kind !== "allow") {
+    return { shouldEnqueue: false, enqueueLimit: 0 };
+  }
+
+  return {
+    shouldEnqueue: availableSlots > 0,
+    enqueueLimit: availableSlots,
+  };
+};
 
 export const redactEngineLogEntry = (
   entry: EngineRunLogEntry,
@@ -326,6 +367,29 @@ export class LoopScheduler {
     const schedulerStatus = this.repository.getEngineSchedulerStatus();
     const automationSettings = this.repository.getAutomationSettings();
     const policy = evaluateGlobalAutomationPolicy(automationSettings);
+
+    let taskLoopPickup: TickResult["taskLoopPickup"];
+    const pickupPlan = planTaskLoopPickup({
+      tickMode: mode,
+      schedulerStatus,
+      policyDecision: policy,
+      activeTaskRunJobs: this.repository.countActiveTaskRunJobs(),
+    });
+
+    if (pickupPlan.shouldEnqueue) {
+      const pickupResult = enqueueTaskLoopJobs(this.repository, {
+        trigger: "scheduler",
+        automated: true,
+        limit: pickupPlan.enqueueLimit,
+        recordSkips: true,
+      });
+      taskLoopPickup = {
+        enqueued: pickupResult.enqueued.length,
+        skipped: pickupResult.skipped.length,
+        deduped: pickupResult.deduped.length,
+      };
+    }
+
     const nextJob = this.repository.fetchNextQueuedJob();
     const plan = planNextTick({
       schedulerStatus,
@@ -343,7 +407,7 @@ export class LoopScheduler {
         lastError: plan.action === "skip" ? plan.reason : null,
       });
 
-      return { plan, schedulerStatus: updated };
+      return { plan, schedulerStatus: updated, taskLoopPickup };
     }
 
     const running = this.repository.updateEngineJob(plan.jobId, {
@@ -420,6 +484,7 @@ export class LoopScheduler {
       plan,
       job,
       schedulerStatus: schedulerStatusAfterTick,
+      taskLoopPickup,
     };
   }
 }

@@ -818,6 +818,10 @@ const normalizeProjectAutomationPolicy = (
       typeof input.allowLowRiskAutoAoReadyLabeling === "boolean"
         ? input.allowLowRiskAutoAoReadyLabeling
         : fallback.allowLowRiskAutoAoReadyLabeling,
+    allowLowRiskAutoTaskExecution:
+      typeof input.allowLowRiskAutoTaskExecution === "boolean"
+        ? input.allowLowRiskAutoTaskExecution
+        : fallback.allowLowRiskAutoTaskExecution,
     mediumRiskRequiresReview:
       typeof input.mediumRiskRequiresReview === "boolean"
         ? input.mediumRiskRequiresReview
@@ -856,6 +860,13 @@ const assertProjectAutomationPolicy = (
         : assertOptionalBoolean(
             input.allowLowRiskAutoAoReadyLabeling,
             "automationPolicy.allowLowRiskAutoAoReadyLabeling",
+          ),
+    allowLowRiskAutoTaskExecution:
+      input.allowLowRiskAutoTaskExecution === undefined
+        ? fallback.allowLowRiskAutoTaskExecution
+        : assertOptionalBoolean(
+            input.allowLowRiskAutoTaskExecution,
+            "automationPolicy.allowLowRiskAutoTaskExecution",
           ),
     mediumRiskRequiresReview:
       input.mediumRiskRequiresReview === undefined
@@ -2928,6 +2939,20 @@ export class LoopBoardRepository {
 
   hasActiveTaskRunJob(taskId: string): boolean {
     return this.getActiveTaskRunJobForTask(taskId) !== undefined;
+  }
+
+  countActiveTaskRunJobs(): number {
+    const row = this.database
+      .prepare(
+        `
+          SELECT COUNT(*) AS count
+          FROM engine_jobs
+          WHERE kind = 'task-run' AND status IN ('queued', 'running')
+        `,
+      )
+      .get() as { count: number };
+
+    return row.count;
   }
 
   enqueueTaskRunJob(input: EnqueueTaskRunJobInput): EnqueueTaskRunJobResult {

@@ -148,6 +148,7 @@ export interface Project {
 export interface ProjectAutomationPolicy {
   allowLowRiskAutoIssueCreation: boolean;
   allowLowRiskAutoAoReadyLabeling: boolean;
+  allowLowRiskAutoTaskExecution: boolean;
   mediumRiskRequiresReview: boolean;
   highRiskManualOnly: boolean;
 }
@@ -155,6 +156,7 @@ export interface ProjectAutomationPolicy {
 export const defaultProjectAutomationPolicy: ProjectAutomationPolicy = {
   allowLowRiskAutoIssueCreation: true,
   allowLowRiskAutoAoReadyLabeling: true,
+  allowLowRiskAutoTaskExecution: false,
   mediumRiskRequiresReview: true,
   highRiskManualOnly: true,
 };
