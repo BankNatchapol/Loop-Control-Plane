@@ -9,7 +9,7 @@ import { applyMigrations } from "@/db/migrate";
 import { seedDatabase } from "@/db/seed";
 import { seedFeatures, seedProject, seedTasks, seedWorkflows } from "@/lib/loopboard";
 
-describe("LoopBoard SQLite setup", () => {
+describe("Loop Control Plane SQLite setup", () => {
   it("applies migrations and seeds the Phase 01 demo board", () => {
     const tempDirectory = mkdtempSync(join(tmpdir(), "loopboard-db-"));
     const database = new DatabaseSync(join(tempDirectory, "loopboard.sqlite"));
@@ -27,6 +27,7 @@ describe("LoopBoard SQLite setup", () => {
         "0005_project_github_repository.sql",
         "0006_workflow_editor_runner.sql",
         "0007_automation_policy_settings.sql",
+        "0008_loop_engine.sql",
       ]);
       assert.equal(
         database.prepare("SELECT COUNT(*) AS count FROM projects").get()

@@ -1,6 +1,13 @@
 import { index, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 import type {
+  EngineJobKind,
+  EngineJobStatus,
+  EngineRunLogEntry,
+  EngineSchedulerState,
+  ExecutorBackend,
+} from "@/lib/engine/loop-engine-types";
+import type {
   Feature,
   FeatureEvent,
   FeatureEventType,
@@ -307,6 +314,54 @@ export const workflowRuns = sqliteTable(
   ],
 );
 
+export const engineJobs = sqliteTable(
+  "engine_jobs",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind").notNull().$type<EngineJobKind>(),
+    status: text("status").notNull().$type<EngineJobStatus>(),
+    backend: text("backend").notNull().$type<ExecutorBackend>(),
+    projectId: text("project_id").references(() => projects.id, {
+      onDelete: "cascade",
+    }),
+    taskId: text("task_id").references(() => tasks.id, { onDelete: "set null" }),
+    workflowRunId: text("workflow_run_id").references(() => workflowRuns.id, {
+      onDelete: "set null",
+    }),
+    workflowNodeId: text("workflow_node_id"),
+    payload: text("payload", { mode: "json" })
+      .notNull()
+      .$type<Record<string, unknown>>(),
+    result: text("result", { mode: "json" }).$type<Record<string, unknown>>(),
+    executionLogs: text("execution_logs", { mode: "json" })
+      .notNull()
+      .$type<EngineRunLogEntry[]>(),
+    error: text("error"),
+    attempt: text("attempt").notNull(),
+    maxAttempts: text("max_attempts").notNull(),
+    queuedAt: text("queued_at").notNull(),
+    startedAt: text("started_at"),
+    completedAt: text("completed_at"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("engine_jobs_status_idx").on(table.status),
+    index("engine_jobs_status_queued_at_idx").on(table.status, table.queuedAt),
+    index("engine_jobs_project_id_idx").on(table.projectId),
+    index("engine_jobs_project_status_idx").on(table.projectId, table.status),
+  ],
+);
+
+export const engineSchedulerState = sqliteTable("engine_scheduler_state", {
+  id: text("id").primaryKey(),
+  status: text("status").notNull().$type<EngineSchedulerState>(),
+  lastTickAt: text("last_tick_at"),
+  tickCount: text("tick_count").notNull(),
+  lastError: text("last_error"),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export const workflowRunSteps = sqliteTable(
   "workflow_run_steps",
   {
@@ -349,5 +404,7 @@ export type TaskEventRow = typeof taskEvents.$inferSelect;
 export type WorkflowRow = typeof workflows.$inferSelect;
 export type WorkflowNodeRow = typeof workflowNodes.$inferSelect;
 export type WorkflowEdgeRow = typeof workflowEdges.$inferSelect;
+export type EngineJobRow = typeof engineJobs.$inferSelect;
+export type EngineSchedulerStateRow = typeof engineSchedulerState.$inferSelect;
 export type WorkflowRunRow = typeof workflowRuns.$inferSelect;
 export type WorkflowRunStepRow = typeof workflowRunSteps.$inferSelect;

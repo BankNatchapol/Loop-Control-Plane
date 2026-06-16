@@ -300,6 +300,60 @@ export const seedDatabase = (database: DatabaseSync): void => {
       }
     }
 
+    database
+      .prepare(
+        `
+          INSERT INTO engine_jobs (
+            id, kind, status, backend, project_id, task_id, workflow_run_id,
+            workflow_node_id, payload, result, execution_logs, error, attempt,
+            max_attempts, queued_at, started_at, completed_at, created_at, updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            kind = excluded.kind,
+            status = excluded.status,
+            backend = excluded.backend,
+            project_id = excluded.project_id,
+            payload = excluded.payload,
+            result = excluded.result,
+            execution_logs = excluded.execution_logs,
+            error = excluded.error,
+            attempt = excluded.attempt,
+            max_attempts = excluded.max_attempts,
+            queued_at = excluded.queued_at,
+            started_at = excluded.started_at,
+            completed_at = excluded.completed_at,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run(
+        "engine-job-seed-demo-ping",
+        "demo-ping",
+        "completed",
+        "stub",
+        seedProject.id,
+        null,
+        null,
+        null,
+        json({ message: "Historical demo ping from seed data." }),
+        json({ ok: true, stdoutSummary: "[redacted] stub completed deterministically" }),
+        json([
+          {
+            timestamp: "2026-06-15T18:00:00.000Z",
+            level: "info",
+            message: "Stub executor completed demo-ping deterministically.",
+          },
+        ]),
+        null,
+        "1",
+        "3",
+        "2026-06-15T18:00:00.000Z",
+        "2026-06-15T18:00:01.000Z",
+        "2026-06-15T18:00:02.000Z",
+        "2026-06-15T18:00:00.000Z",
+        "2026-06-15T18:00:02.000Z",
+      );
+
     database.exec("COMMIT;");
   } catch (error) {
     database.exec("ROLLBACK;");
@@ -313,6 +367,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   seedDatabase(database);
   database.close();
   console.log(
-    `Seeded LoopBoard demo data${applied.length > 0 ? ` after ${applied.length} migration(s)` : ""}.`,
+    `Seeded Loop Control Plane demo data${applied.length > 0 ? ` after ${applied.length} migration(s)` : ""}.`,
   );
 }

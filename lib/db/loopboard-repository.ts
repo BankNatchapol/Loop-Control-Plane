@@ -49,6 +49,18 @@ import {
   evaluateTaskPolicy,
   type AutomationSettings,
 } from "@/lib/policies/automation-policy";
+import {
+  isEngineJobKind,
+  isExecutorBackend,
+  type EngineJob,
+  type EngineJobKind,
+  type EngineJobStatus,
+  type EngineRunLogEntry,
+  type EngineRunLogLevel,
+  type EngineSchedulerState,
+  type EngineSchedulerStatus,
+  type ExecutorBackend,
+} from "@/lib/engine/loop-engine-types";
 
 export type MetadataValue = string | number | boolean | null;
 export type EventPayload = Record<string, MetadataValue>;
@@ -288,6 +300,52 @@ export interface UpsertWorkflowRunStepInput {
   updatedAt?: string;
 }
 
+export interface CreateEngineJobInput {
+  id?: string;
+  kind: EngineJobKind;
+  status?: EngineJobStatus;
+  backend: ExecutorBackend;
+  projectId?: string;
+  taskId?: string;
+  workflowRunId?: string;
+  workflowNodeId?: string;
+  payload?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  executionLogs?: EngineRunLogEntry[];
+  error?: string;
+  attempt?: number;
+  maxAttempts?: number;
+  queuedAt?: string;
+  startedAt?: string;
+  completedAt?: string;
+  createdAt?: string;
+}
+
+export interface UpdateEngineJobInput {
+  status?: EngineJobStatus;
+  result?: Record<string, unknown> | null;
+  executionLogs?: EngineRunLogEntry[];
+  error?: string | null;
+  attempt?: number;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  updatedAt?: string;
+}
+
+export interface ListEngineJobsOptions {
+  projectId?: string;
+  status?: EngineJobStatus | EngineJobStatus[];
+  limit?: number;
+}
+
+export interface UpdateEngineSchedulerInput {
+  status?: EngineSchedulerState;
+  lastTickAt?: string | null;
+  tickCount?: number;
+  lastError?: string | null;
+  updatedAt?: string;
+}
+
 type ProjectRow = {
   id: string;
   name: string;
@@ -455,6 +513,37 @@ type WorkflowRunStepRow = {
   updated_at: string;
 };
 
+type EngineJobRow = {
+  id: string;
+  kind: EngineJobKind;
+  status: EngineJobStatus;
+  backend: ExecutorBackend;
+  project_id: string | null;
+  task_id: string | null;
+  workflow_run_id: string | null;
+  workflow_node_id: string | null;
+  payload: string;
+  result: string | null;
+  execution_logs: string;
+  error: string | null;
+  attempt: string;
+  max_attempts: string;
+  queued_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type EngineSchedulerStateRow = {
+  id: string;
+  status: EngineSchedulerState;
+  last_tick_at: string | null;
+  tick_count: string;
+  last_error: string | null;
+  updated_at: string;
+};
+
 export class LoopBoardRepositoryError extends Error {
   constructor(
     message: string,
@@ -579,6 +668,19 @@ const workflowRunStepStatuses = new Set<WorkflowRunStepStatus>([
   "failed",
   "skipped",
 ]);
+const engineJobStatuses = new Set<EngineJobStatus>([
+  "queued",
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+const engineSchedulerStates = new Set<EngineSchedulerState>([
+  "stopped",
+  "running",
+  "paused",
+]);
+const engineRunLogLevels = new Set<EngineRunLogLevel>(["info", "warn", "error"]);
 const featureStatusRank: Record<FeatureStatus, number> = {
   "prd-draft": 0,
   "spec-review": 1,
@@ -933,6 +1035,81 @@ const assertWorkflowRunStepStatus = (
   return value as WorkflowRunStepStatus;
 };
 
+const assertEngineJobKind = (value: unknown): EngineJobKind => {
+  if (!isEngineJobKind(value)) {
+    throw new ValidationError("engine job kind is not supported.");
+  }
+
+  return value;
+};
+
+const assertEngineJobStatus = (value: unknown): EngineJobStatus => {
+  if (typeof value !== "string" || !engineJobStatuses.has(value as EngineJobStatus)) {
+    throw new ValidationError("engine job status is not supported.");
+  }
+
+  return value as EngineJobStatus;
+};
+
+const assertExecutorBackend = (value: unknown): ExecutorBackend => {
+  if (!isExecutorBackend(value)) {
+    throw new ValidationError("executor backend is not supported.");
+  }
+
+  return value;
+};
+
+const assertEngineSchedulerState = (value: unknown): EngineSchedulerState => {
+  if (
+    typeof value !== "string" ||
+    !engineSchedulerStates.has(value as EngineSchedulerState)
+  ) {
+    throw new ValidationError("engine scheduler state is not supported.");
+  }
+
+  return value as EngineSchedulerState;
+};
+
+const assertEngineRunLogs = (
+  value: unknown,
+  fieldName: string,
+): EngineRunLogEntry[] => {
+  if (!Array.isArray(value)) {
+    throw new ValidationError(`${fieldName} must be an array.`);
+  }
+
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new ValidationError(`${fieldName}[${index}] must be an object.`);
+    }
+
+    const record = entry as Record<string, unknown>;
+    if (typeof record.timestamp !== "string" || record.timestamp.length === 0) {
+      throw new ValidationError(`${fieldName}[${index}].timestamp must be a string.`);
+    }
+
+    if (
+      typeof record.level !== "string" ||
+      !engineRunLogLevels.has(record.level as EngineRunLogLevel)
+    ) {
+      throw new ValidationError(`${fieldName}[${index}].level is not supported.`);
+    }
+
+    if (typeof record.message !== "string") {
+      throw new ValidationError(`${fieldName}[${index}].message must be a string.`);
+    }
+
+    return {
+      timestamp: record.timestamp,
+      level: record.level as EngineRunLogLevel,
+      message: record.message,
+      ...(record.metadata !== undefined
+        ? { metadata: assertRecord(record.metadata, `${fieldName}[${index}].metadata`) }
+        : {}),
+    };
+  });
+};
+
 const assertWorkflowPosition = (
   value: unknown,
 ): WorkflowNode["position"] => {
@@ -1221,6 +1398,40 @@ const workflowRunFromRow = (
   startedAt: row.started_at ?? undefined,
   completedAt: row.completed_at ?? undefined,
   createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
+const engineJobFromRow = (row: EngineJobRow): EngineJob => ({
+  id: row.id,
+  kind: row.kind,
+  status: row.status,
+  backend: row.backend,
+  projectId: row.project_id ?? undefined,
+  taskId: row.task_id ?? undefined,
+  workflowRunId: row.workflow_run_id ?? undefined,
+  workflowNodeId: row.workflow_node_id ?? undefined,
+  payload: parseJson<Record<string, unknown>>(row.payload, {}),
+  result: row.result
+    ? parseJson<Record<string, unknown>>(row.result, {})
+    : undefined,
+  executionLogs: parseJson<EngineRunLogEntry[]>(row.execution_logs, []),
+  error: row.error ?? undefined,
+  attempt: Number(row.attempt),
+  maxAttempts: Number(row.max_attempts),
+  queuedAt: row.queued_at,
+  startedAt: row.started_at ?? undefined,
+  completedAt: row.completed_at ?? undefined,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
+const engineSchedulerFromRow = (
+  row: EngineSchedulerStateRow,
+): EngineSchedulerStatus => ({
+  status: row.status,
+  lastTickAt: row.last_tick_at ?? undefined,
+  tickCount: Number(row.tick_count),
+  lastError: row.last_error ?? undefined,
   updatedAt: row.updated_at,
 });
 
@@ -2489,6 +2700,252 @@ export class LoopBoardRepository {
     return this.getWorkflowRun(run.id);
   }
 
+  listEngineJobs(options: ListEngineJobsOptions = {}): EngineJob[] {
+    const clauses: string[] = [];
+    const params: Array<string | number> = [];
+
+    if (options.projectId) {
+      clauses.push("project_id = ?");
+      params.push(assertNonEmptyString(options.projectId, "projectId"));
+    }
+
+    if (options.status !== undefined) {
+      const statuses = Array.isArray(options.status) ? options.status : [options.status];
+      if (statuses.length === 0) {
+        throw new ValidationError("status filter must include at least one value.");
+      }
+
+      clauses.push(`status IN (${statuses.map(() => "?").join(", ")})`);
+      params.push(...statuses.map((status) => assertEngineJobStatus(status)));
+    }
+
+    const limit =
+      options.limit === undefined
+        ? undefined
+        : assertPositiveInteger(options.limit, "limit");
+    const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const limitClause = limit === undefined ? "" : " LIMIT ?";
+
+    const rows = this.database
+      .prepare(
+        `
+          SELECT * FROM engine_jobs
+          ${whereClause}
+          ORDER BY queued_at DESC, created_at DESC
+          ${limitClause}
+        `,
+      )
+      .all(...params, ...(limit === undefined ? [] : [limit])) as EngineJobRow[];
+
+    return rows.map(engineJobFromRow);
+  }
+
+  getEngineJob(jobId: string): EngineJob {
+    const row = this.database
+      .prepare("SELECT * FROM engine_jobs WHERE id = ?")
+      .get(assertNonEmptyString(jobId, "jobId")) as EngineJobRow | undefined;
+
+    if (!row) {
+      throw new NotFoundError(`Engine job "${jobId}" was not found.`);
+    }
+
+    return engineJobFromRow(row);
+  }
+
+  createEngineJob(input: CreateEngineJobInput): EngineJob {
+    const kind = assertEngineJobKind(input.kind);
+    const backend = assertExecutorBackend(input.backend);
+    const projectId = input.projectId
+      ? assertNonEmptyString(input.projectId, "projectId")
+      : undefined;
+    const taskId = input.taskId
+      ? assertNonEmptyString(input.taskId, "taskId")
+      : undefined;
+    const workflowRunId = input.workflowRunId
+      ? assertNonEmptyString(input.workflowRunId, "workflowRunId")
+      : undefined;
+    const workflowNodeId = input.workflowNodeId
+      ? assertNonEmptyString(input.workflowNodeId, "workflowNodeId")
+      : undefined;
+
+    this.assertEngineJobReferences({
+      projectId,
+      taskId,
+      workflowRunId,
+      workflowNodeId,
+    });
+
+    const now = input.createdAt ?? new Date().toISOString();
+    const job: EngineJob = {
+      id: input.id ?? `engine-job-${randomUUID()}`,
+      kind,
+      status: input.status ? assertEngineJobStatus(input.status) : "queued",
+      backend,
+      projectId,
+      taskId,
+      workflowRunId,
+      workflowNodeId,
+      payload: input.payload ? assertRecord(input.payload, "payload") : {},
+      result: input.result ? assertRecord(input.result, "result") : undefined,
+      executionLogs: input.executionLogs
+        ? assertEngineRunLogs(input.executionLogs, "executionLogs")
+        : [],
+      error: input.error ? assertOptionalString(input.error, "error") : undefined,
+      attempt: assertPositiveInteger(input.attempt ?? 1, "attempt"),
+      maxAttempts: assertPositiveInteger(input.maxAttempts ?? 3, "maxAttempts"),
+      queuedAt: input.queuedAt ?? now,
+      startedAt: input.startedAt,
+      completedAt: input.completedAt,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.insertEngineJob(job);
+    return this.getEngineJob(job.id);
+  }
+
+  updateEngineJob(jobId: string, input: UpdateEngineJobInput): EngineJob {
+    const job = this.getEngineJob(assertNonEmptyString(jobId, "jobId"));
+    const updatedAt = input.updatedAt ?? new Date().toISOString();
+    const nextJob: EngineJob = {
+      ...job,
+      status:
+        input.status === undefined ? job.status : assertEngineJobStatus(input.status),
+      result:
+        input.result === undefined
+          ? job.result
+          : input.result === null
+            ? undefined
+            : assertRecord(input.result, "result"),
+      executionLogs:
+        input.executionLogs === undefined
+          ? job.executionLogs
+          : assertEngineRunLogs(input.executionLogs, "executionLogs"),
+      error:
+        input.error === undefined
+          ? job.error
+          : input.error === null
+            ? undefined
+            : assertOptionalString(input.error, "error"),
+      attempt:
+        input.attempt === undefined
+          ? job.attempt
+          : assertPositiveInteger(input.attempt, "attempt"),
+      startedAt:
+        input.startedAt === undefined
+          ? job.startedAt
+          : input.startedAt === null
+            ? undefined
+            : assertOptionalString(input.startedAt, "startedAt"),
+      completedAt:
+        input.completedAt === undefined
+          ? job.completedAt
+          : input.completedAt === null
+            ? undefined
+            : assertOptionalString(input.completedAt, "completedAt"),
+      updatedAt,
+    };
+
+    this.updateEngineJobRow(nextJob);
+    return this.getEngineJob(job.id);
+  }
+
+  appendEngineLogEntry(
+    jobId: string,
+    entry: EngineRunLogEntry,
+  ): EngineJob {
+    const job = this.getEngineJob(assertNonEmptyString(jobId, "jobId"));
+    const [validatedEntry] = assertEngineRunLogs([entry], "entry");
+    const updatedAt = new Date().toISOString();
+    const nextJob: EngineJob = {
+      ...job,
+      executionLogs: [...job.executionLogs, validatedEntry],
+      updatedAt,
+    };
+
+    this.updateEngineJobRow(nextJob);
+    return this.getEngineJob(job.id);
+  }
+
+  fetchNextQueuedJob(): EngineJob | undefined {
+    const row = this.database
+      .prepare(
+        `
+          SELECT * FROM engine_jobs
+          WHERE status = 'queued'
+          ORDER BY queued_at ASC, created_at ASC
+          LIMIT 1
+        `,
+      )
+      .get() as EngineJobRow | undefined;
+
+    return row ? engineJobFromRow(row) : undefined;
+  }
+
+  getEngineSchedulerStatus(): EngineSchedulerStatus {
+    const row = this.database
+      .prepare("SELECT * FROM engine_scheduler_state WHERE id = 'default'")
+      .get() as EngineSchedulerStateRow | undefined;
+
+    if (!row) {
+      throw new NotFoundError("Engine scheduler state was not found.");
+    }
+
+    return engineSchedulerFromRow(row);
+  }
+
+  updateEngineSchedulerStatus(
+    input: UpdateEngineSchedulerInput,
+  ): EngineSchedulerStatus {
+    const current = this.getEngineSchedulerStatus();
+    const updatedAt = input.updatedAt ?? new Date().toISOString();
+    const nextStatus: EngineSchedulerStatus = {
+      status:
+        input.status === undefined
+          ? current.status
+          : assertEngineSchedulerState(input.status),
+      lastTickAt:
+        input.lastTickAt === undefined
+          ? current.lastTickAt
+          : input.lastTickAt === null
+            ? undefined
+            : assertOptionalString(input.lastTickAt, "lastTickAt"),
+      tickCount:
+        input.tickCount === undefined
+          ? current.tickCount
+          : assertPositiveInteger(input.tickCount, "tickCount"),
+      lastError:
+        input.lastError === undefined
+          ? current.lastError
+          : input.lastError === null
+            ? undefined
+            : assertOptionalString(input.lastError, "lastError"),
+      updatedAt,
+    };
+
+    this.database
+      .prepare(
+        `
+          UPDATE engine_scheduler_state
+          SET status = ?,
+              last_tick_at = ?,
+              tick_count = ?,
+              last_error = ?,
+              updated_at = ?
+          WHERE id = 'default'
+        `,
+      )
+      .run(
+        nextStatus.status,
+        nextStatus.lastTickAt ?? null,
+        String(nextStatus.tickCount),
+        nextStatus.lastError ?? null,
+        nextStatus.updatedAt,
+      );
+
+    return this.getEngineSchedulerStatus();
+  }
+
   private listTaskEvents(taskId: string): TaskEvent[] {
     const rows = this.database
       .prepare("SELECT * FROM task_events WHERE task_id = ? ORDER BY created_at")
@@ -2533,6 +2990,64 @@ export class LoopBoardRepository {
       throw new ValidationError(
         `Feature "${featureId}" does not belong to project "${projectId}".`,
       );
+    }
+  }
+
+  private assertEngineJobReferences({
+    projectId,
+    taskId,
+    workflowRunId,
+    workflowNodeId,
+  }: {
+    projectId?: string;
+    taskId?: string;
+    workflowRunId?: string;
+    workflowNodeId?: string;
+  }): void {
+    if (projectId) {
+      this.getProject(projectId);
+    }
+
+    if (taskId) {
+      const task = this.getTask(taskId);
+      if (projectId && task.projectId !== projectId) {
+        throw new ValidationError(
+          `Task "${taskId}" does not belong to project "${projectId}".`,
+        );
+      }
+    }
+
+    if (workflowRunId) {
+      const run = this.getWorkflowRun(workflowRunId);
+      if (projectId && run.projectId !== projectId) {
+        throw new ValidationError(
+          `Workflow run "${workflowRunId}" does not belong to project "${projectId}".`,
+        );
+      }
+      if (taskId && run.featureId) {
+        const task = this.getTask(taskId);
+        if (task.featureId !== run.featureId) {
+          throw new ValidationError(
+            `Task "${taskId}" does not belong to workflow run feature "${run.featureId}".`,
+          );
+        }
+      }
+    }
+
+    if (workflowNodeId) {
+      if (!workflowRunId) {
+        throw new ValidationError(
+          "workflowNodeId requires workflowRunId for validation.",
+        );
+      }
+
+      const run = this.getWorkflowRun(workflowRunId);
+      const workflow = this.getWorkflow(run.workflowId);
+      if (!workflow.nodes.some((node) => node.id === workflowNodeId)) {
+        throw new ValidationError(
+          "workflowNodeId must reference a node in the workflow run's workflow.",
+        );
+      }
     }
   }
 
@@ -3138,6 +3653,70 @@ export class LoopBoardRepository {
         step.completedAt ?? null,
         step.updatedAt,
         step.id,
+      );
+  }
+
+  private insertEngineJob(job: EngineJob): void {
+    this.database
+      .prepare(
+        `
+          INSERT INTO engine_jobs (
+            id, kind, status, backend, project_id, task_id, workflow_run_id,
+            workflow_node_id, payload, result, execution_logs, error, attempt,
+            max_attempts, queued_at, started_at, completed_at, created_at, updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      )
+      .run(
+        job.id,
+        job.kind,
+        job.status,
+        job.backend,
+        job.projectId ?? null,
+        job.taskId ?? null,
+        job.workflowRunId ?? null,
+        job.workflowNodeId ?? null,
+        json(job.payload),
+        job.result ? json(job.result) : null,
+        json(job.executionLogs),
+        job.error ?? null,
+        String(job.attempt),
+        String(job.maxAttempts),
+        job.queuedAt,
+        job.startedAt ?? null,
+        job.completedAt ?? null,
+        job.createdAt,
+        job.updatedAt,
+      );
+  }
+
+  private updateEngineJobRow(job: EngineJob): void {
+    this.database
+      .prepare(
+        `
+          UPDATE engine_jobs
+          SET status = ?,
+              result = ?,
+              execution_logs = ?,
+              error = ?,
+              attempt = ?,
+              started_at = ?,
+              completed_at = ?,
+              updated_at = ?
+          WHERE id = ?
+        `,
+      )
+      .run(
+        job.status,
+        job.result ? json(job.result) : null,
+        json(job.executionLogs),
+        job.error ?? null,
+        String(job.attempt),
+        job.startedAt ?? null,
+        job.completedAt ?? null,
+        job.updatedAt,
+        job.id,
       );
   }
 
