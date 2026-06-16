@@ -3,10 +3,10 @@ import type {
   LoopBoardRepository,
   PersistedTask,
 } from "@/lib/db/loopboard-repository";
+import { resolveExecutorConfigWithFallbacks } from "@/lib/engine/executor-config-resolver";
 import type { EngineJob, ExecutorConfig } from "@/lib/engine/loop-engine-types";
 import {
   buildTaskRunJobPayload,
-  defaultExecutorConfig,
   type TaskRunAction,
   type TaskRunTrigger,
 } from "@/lib/engine/loop-engine-types";
@@ -143,15 +143,17 @@ export const evaluateTaskPickupPolicy = (
   });
 
 const resolveExecutorConfig = (
-  _task: PersistedTask,
+  task: PersistedTask,
+  project: Project,
   override?: ExecutorConfig,
-): ExecutorConfig => {
-  if (override) {
-    return override;
-  }
-
-  return defaultExecutorConfig("stub");
-};
+  action: TaskRunAction = "execute",
+): ExecutorConfig =>
+  resolveExecutorConfigWithFallbacks({
+    ...(override ? { explicitConfig: override } : {}),
+    project,
+    task,
+    taskAction: action,
+  });
 
 const toCandidate = (task: PersistedTask): TaskLoopCandidate => ({
   taskId: task.id,
@@ -286,7 +288,7 @@ export const enqueueTaskLoopJobs = (
   for (const candidate of scan.eligible) {
     const task = repository.getTask(candidate.taskId);
     const project = repository.getProject(candidate.projectId);
-    const executorConfig = resolveExecutorConfig(task, options.executorConfig);
+    const executorConfig = resolveExecutorConfig(task, project, options.executorConfig, action);
     const payload = buildTaskRunJobPayload({
       taskId: task.id,
       projectId: project.id,

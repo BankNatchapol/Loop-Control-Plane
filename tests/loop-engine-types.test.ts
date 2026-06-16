@@ -79,12 +79,15 @@ describe("Loop engine types", () => {
   });
 
   it("resolves executor targets with explainable disabled-backend errors", () => {
-    const disabled = resolveExecutorTarget("cursor", "demo-ping");
+    const disabled = resolveExecutorTarget("agent-orchestrator", "demo-ping");
     assert.equal(disabled.ok, false);
     if (!disabled.ok) {
       assert.equal(disabled.code, "executor_backend_disabled");
-      assert.match(disabled.reasons.join(" "), /not enabled/i);
+      assert.match(disabled.reasons.join(" "), /Agent Orchestrator adapter/i);
     }
+
+    const enabled = resolveExecutorTarget("cursor", "demo-ping");
+    assert.deepEqual(enabled, { ok: true, backend: "cursor", jobKind: "demo-ping" });
 
     const unknown = resolveExecutorTarget("made-up", "demo-ping");
     assert.equal(unknown.ok, false);

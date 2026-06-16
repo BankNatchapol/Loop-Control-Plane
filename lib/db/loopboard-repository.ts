@@ -42,6 +42,8 @@ import {
   type WorkflowRunStep,
   type WorkflowRunStepStatus,
   defaultProjectAutomationPolicy,
+  defaultProjectEngineSettings,
+  type ProjectEngineSettings,
 } from "@/lib/loopboard";
 import {
   defaultAutomationSettings,
@@ -115,6 +117,7 @@ export interface CreateProjectInput {
   workflowsPath?: string;
   handoffsPath?: string;
   automationPolicy?: Partial<ProjectAutomationPolicy>;
+  engineSettings?: Partial<ProjectEngineSettings>;
   createdAt?: string;
 }
 
@@ -173,6 +176,7 @@ export interface UpdateProjectInput {
   workflowsPath?: string;
   handoffsPath?: string;
   automationPolicy?: Partial<ProjectAutomationPolicy>;
+  engineSettings?: Partial<ProjectEngineSettings>;
   updatedAt?: string;
 }
 
@@ -378,6 +382,7 @@ type ProjectRow = {
   workflows_path: string;
   handoffs_path: string;
   automation_policy: string;
+  engine_settings: string;
   created_at: string;
   updated_at: string;
 };
@@ -798,6 +803,49 @@ const assertAutomationSettings = (value: unknown): AutomationSettings => {
       "globalAutoRunEnabled",
     ),
   };
+};
+
+const normalizeProjectEngineSettings = (
+  value: unknown,
+  fallback: ProjectEngineSettings = defaultProjectEngineSettings,
+): ProjectEngineSettings => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return fallback;
+  }
+
+  const input = value as Partial<ProjectEngineSettings>;
+  const settings: ProjectEngineSettings = { ...fallback };
+
+  if (
+    typeof input.defaultTaskBackend === "string" &&
+    isExecutorBackend(input.defaultTaskBackend)
+  ) {
+    settings.defaultTaskBackend = input.defaultTaskBackend;
+  }
+
+  if (
+    typeof input.defaultReviewBackend === "string" &&
+    isExecutorBackend(input.defaultReviewBackend)
+  ) {
+    settings.defaultReviewBackend = input.defaultReviewBackend;
+  }
+
+  return settings;
+};
+
+const assertProjectEngineSettings = (
+  value: unknown,
+  fallback: ProjectEngineSettings = defaultProjectEngineSettings,
+): ProjectEngineSettings => {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ValidationError("engineSettings must be a JSON object.");
+  }
+
+  return normalizeProjectEngineSettings(value, fallback);
 };
 
 const normalizeProjectAutomationPolicy = (
@@ -1255,6 +1303,12 @@ const projectFromRow = (row: ProjectRow): Project => ({
       defaultProjectAutomationPolicy,
     ),
   ),
+  engineSettings: normalizeProjectEngineSettings(
+    parseJson<ProjectEngineSettings>(
+      row.engine_settings,
+      defaultProjectEngineSettings,
+    ),
+  ),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -1544,6 +1598,7 @@ export class LoopBoardRepository {
       handoffsPath:
         assertOptionalString(input.handoffsPath, "handoffsPath") || "handoffs",
       automationPolicy: assertProjectAutomationPolicy(input.automationPolicy),
+      engineSettings: assertProjectEngineSettings(input.engineSettings),
       createdAt: now,
       updatedAt: now,
     };
@@ -1617,6 +1672,10 @@ export class LoopBoardRepository {
       automationPolicy: assertProjectAutomationPolicy(
         input.automationPolicy,
         project.automationPolicy,
+      ),
+      engineSettings: assertProjectEngineSettings(
+        input.engineSettings,
+        project.engineSettings,
       ),
       updatedAt,
     };
@@ -3298,9 +3357,9 @@ export class LoopBoardRepository {
             id, name, description, repository, repo_path, is_git_repository,
             current_branch, default_branch, github_remote_url, spec_kit_root,
             github_repository, specs_path, tasks_path, workflows_path, handoffs_path,
-            automation_policy, created_at, updated_at
+            automation_policy, engine_settings, created_at, updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -3320,6 +3379,7 @@ export class LoopBoardRepository {
         project.workflowsPath,
         project.handoffsPath,
         json(project.automationPolicy),
+        json(project.engineSettings),
         project.createdAt,
         project.updatedAt,
       );
@@ -3334,7 +3394,7 @@ export class LoopBoardRepository {
             is_git_repository = ?, current_branch = ?, default_branch = ?,
             github_remote_url = ?, github_repository = ?, spec_kit_root = ?, specs_path = ?,
             tasks_path = ?, workflows_path = ?, handoffs_path = ?, automation_policy = ?,
-            updated_at = ?
+            engine_settings = ?, updated_at = ?
           WHERE id = ?
         `,
       )
@@ -3354,6 +3414,7 @@ export class LoopBoardRepository {
         project.workflowsPath,
         project.handoffsPath,
         json(project.automationPolicy),
+        json(project.engineSettings),
         project.updatedAt,
         project.id,
       );

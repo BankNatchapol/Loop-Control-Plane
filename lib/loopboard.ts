@@ -141,6 +141,7 @@ export interface Project {
   workflowsPath: string;
   handoffsPath: string;
   automationPolicy: ProjectAutomationPolicy;
+  engineSettings: ProjectEngineSettings;
   createdAt: string;
   updatedAt: string;
 }
@@ -152,6 +153,13 @@ export interface ProjectAutomationPolicy {
   mediumRiskRequiresReview: boolean;
   highRiskManualOnly: boolean;
 }
+
+export type ProjectEngineSettings = {
+  defaultTaskBackend?: import("@/lib/engine/loop-engine-types").ExecutorBackend;
+  defaultReviewBackend?: import("@/lib/engine/loop-engine-types").ExecutorBackend;
+};
+
+export const defaultProjectEngineSettings: ProjectEngineSettings = {};
 
 export const defaultProjectAutomationPolicy: ProjectAutomationPolicy = {
   allowLowRiskAutoIssueCreation: true,
@@ -476,6 +484,7 @@ export const seedProject: Project = {
   workflowsPath: "workflows",
   handoffsPath: "handoffs",
   automationPolicy: defaultProjectAutomationPolicy,
+  engineSettings: defaultProjectEngineSettings,
   createdAt: BASE_TIMESTAMP,
   updatedAt: "2026-06-14T03:30:00.000Z",
 };

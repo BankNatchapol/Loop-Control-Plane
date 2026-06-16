@@ -244,23 +244,21 @@ describe("process-runner", () => {
     }
   });
 
-  it("returns placeholder errors for cursor, claude, and codex profiles", async () => {
-    const repoPath = mkdtempSync(join(tmpdir(), "loopboard-process-placeholder-"));
-    const runner = new ProcessRunner(successSpawner());
+  it("runs cursor, claude, and codex profiles through the audited spawner", async () => {
+    const repoPath = mkdtempSync(join(tmpdir(), "loopboard-process-agent-"));
+    const runner = new ProcessRunner(successSpawner("agent ok"));
 
     try {
       for (const profile of ["cursor", "claude", "codex"] as const) {
-        await assert.rejects(
-          () =>
-            runner.run({
-              profile,
-              cwd: repoPath,
-              projectRepoPath: repoPath,
-            }),
-          (error) =>
-            error instanceof ProcessRunnerError &&
-            error.code === "process_profile_placeholder",
-        );
+        const result = await runner.run({
+          profile,
+          args: profile === "cursor" ? ["agent", "--version"] : ["--version"],
+          cwd: repoPath,
+          projectRepoPath: repoPath,
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.profile, profile);
       }
     } finally {
       rmSync(repoPath, { recursive: true, force: true });

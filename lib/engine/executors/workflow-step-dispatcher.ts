@@ -1,4 +1,5 @@
 import type { LoopBoardRepository } from "@/lib/db/loopboard-repository";
+import { resolveExecutorConfigWithFallbacks } from "@/lib/engine/executor-config-resolver";
 import {
   validateExecutorConfig,
   type ExecutorConfig,
@@ -69,13 +70,21 @@ export const dispatchWorkflowStepJob = async (
     };
   }
 
-  const executorConfig =
-    resolveExecutorConfig(payload.executor) ??
-    resolveExecutorConfig(context.config) ??
-    context.config;
   const processRunner = deps.processRunner ?? defaultProcessRunner;
   const projectId = context.job.projectId ?? deps.repository.getWorkflowRun(payload.workflowRunId).projectId;
   const project = deps.repository.getProject(projectId);
+  const workflowRun = deps.repository.getWorkflowRun(payload.workflowRunId);
+  const workflow = deps.repository.getWorkflow(workflowRun.workflowId);
+  const workflowNode = workflow.nodes.find((node) => node.id === payload.workflowNodeId);
+  const explicitExecutorConfig =
+    resolveExecutorConfig(payload.executor) ??
+    resolveExecutorConfig(context.config) ??
+    context.config;
+  const executorConfig = resolveExecutorConfigWithFallbacks({
+    explicitConfig: explicitExecutorConfig,
+    project,
+    ...(workflowNode ? { workflowNode } : {}),
+  });
 
   if (payload.nodeType === "spec-kit-actions") {
     const stepResult = await executeSpecKitActions({

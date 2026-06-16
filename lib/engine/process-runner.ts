@@ -113,9 +113,9 @@ const PROFILE_COMMANDS: Record<
   "npm-test": { command: "npm", defaultArgs: ["test"], placeholder: false },
   git: { command: "git", defaultArgs: [], placeholder: false },
   gh: { command: "gh", defaultArgs: [], placeholder: false },
-  cursor: { command: "cursor", defaultArgs: [], placeholder: true },
-  claude: { command: "claude", defaultArgs: [], placeholder: true },
-  codex: { command: "codex", defaultArgs: [], placeholder: true },
+  cursor: { command: "cursor", defaultArgs: [], placeholder: false },
+  claude: { command: "claude", defaultArgs: [], placeholder: false },
+  codex: { command: "codex", defaultArgs: [], placeholder: false },
 };
 
 const ALLOWED_COMMANDS = new Set<string>([

@@ -1,4 +1,5 @@
 import type { LoopBoardRepository } from "@/lib/db/loopboard-repository";
+import { createExternalBackendExecutors } from "@/lib/engine/backends/external-backend-executor";
 import { dispatchWorkflowStepJob } from "@/lib/engine/executors/workflow-step-dispatcher";
 import { executeDeterministicStubJob } from "@/lib/engine/stub-executor-job";
 import { executeTaskRunJob } from "@/lib/engine/task-run-executor";
@@ -108,6 +109,7 @@ export const createExecutorRegistryForRepository = (
       taskRunHandler: (context) =>
         executeTaskRunJob(context, { repository }),
     }),
+    ...createExternalBackendExecutors({ repository }),
   ]);
 
 export class ExecutorRegistry {

@@ -127,6 +127,9 @@ export const EXECUTOR_BACKENDS: readonly ExecutorBackend[] = [
 
 export const IMPLEMENTED_EXECUTOR_BACKENDS: readonly ExecutorBackend[] = [
   "stub",
+  "cursor",
+  "claude-code",
+  "codex",
 ] as const;
 
 export const isExecutorBackend = (value: unknown): value is ExecutorBackend =>
@@ -449,9 +452,11 @@ export const resolveExecutorTarget = (
   const availability = describeExecutorBackendAvailability(backend);
   if (!availability.available) {
     reasons.push(availability.message);
-    reasons.push(
-      "Only the stub backend is registered for Phase 01; real CLI executors arrive in later phases.",
-    );
+    if (backend === "agent-orchestrator") {
+      reasons.push(
+        "Agent Orchestrator adapter arrives in a later Phase 04 task.",
+      );
+    }
 
     return {
       ok: false,

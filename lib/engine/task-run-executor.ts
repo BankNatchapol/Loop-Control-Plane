@@ -6,10 +6,10 @@ import type {
   LoopBoardRepository,
   PersistedTask,
 } from "@/lib/db/loopboard-repository";
+import { resolveExecutorConfigWithFallbacks } from "@/lib/engine/executor-config-resolver";
 import type { ExecutorContext, ExecutorResult } from "@/lib/engine/executor-registry";
 import { executeDeterministicStubJob } from "@/lib/engine/stub-executor-job";
 import {
-  defaultExecutorConfig,
   isExecutorBackend,
   parseTaskRunJobPayload,
   validateExecutorConfig,
@@ -19,7 +19,6 @@ import {
   type ExecutorConfig,
   type TaskRunJobPayload,
 } from "@/lib/engine/loop-engine-types";
-import { resolveWorkflowNodeExecutorConfig } from "@/lib/engine/workflow-node-config";
 import type { Feature, Project, WorkflowNode } from "@/lib/loopboard";
 import { redactSensitiveText } from "@/lib/security/safe-context";
 
@@ -79,26 +78,13 @@ export const resolveTaskRunExecutorConfig = (input: {
   const payloadValidation = validateExecutorConfig(input.payload.executorConfig);
   const payloadConfig = payloadValidation.ok ? payloadValidation.config : undefined;
 
-  if (payloadConfig && payloadConfig.backend !== "stub") {
-    return payloadConfig;
-  }
-
-  const taskLabelBackend = readTaskExecutorBackendLabel(input.task);
-  if (taskLabelBackend && taskLabelBackend !== "stub") {
-    return {
-      ...(payloadConfig ?? defaultExecutorConfig(taskLabelBackend)),
-      backend: taskLabelBackend,
-    };
-  }
-
-  if (input.workflowNode) {
-    const workflowConfig = resolveWorkflowNodeExecutorConfig(input.workflowNode);
-    if (workflowConfig.backend !== "stub") {
-      return workflowConfig;
-    }
-  }
-
-  return payloadConfig ?? defaultExecutorConfig("stub");
+  return resolveExecutorConfigWithFallbacks({
+    ...(payloadConfig ? { explicitConfig: payloadConfig } : {}),
+    project: input.project,
+    task: input.task,
+    taskAction: input.payload.action,
+    ...(input.workflowNode ? { workflowNode: input.workflowNode } : {}),
+  });
 };
 
 export const loadTaskContextInput = (

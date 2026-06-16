@@ -28,6 +28,7 @@ describe("Loop Control Plane SQLite setup", () => {
         "0006_workflow_editor_runner.sql",
         "0007_automation_policy_settings.sql",
         "0008_loop_engine.sql",
+        "0009_project_engine_settings.sql",
       ]);
       assert.equal(
         database.prepare("SELECT COUNT(*) AS count FROM projects").get()

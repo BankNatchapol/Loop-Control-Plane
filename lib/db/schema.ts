@@ -57,6 +57,9 @@ export const projects = sqliteTable("projects", {
   automationPolicy: text("automation_policy", { mode: "json" })
     .notNull()
     .$type<ProjectAutomationPolicy>(),
+  engineSettings: text("engine_settings", { mode: "json" })
+    .notNull()
+    .$type<Project["engineSettings"]>(),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

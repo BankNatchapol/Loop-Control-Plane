@@ -22,10 +22,10 @@ export const seedDatabase = (database: DatabaseSync): void => {
           INSERT INTO projects (
             id, name, description, repository, repo_path, is_git_repository,
             current_branch, default_branch, github_remote_url, github_repository, spec_kit_root,
-            specs_path, tasks_path, workflows_path, handoffs_path,
-            created_at, updated_at
+            specs_path, tasks_path, workflows_path, handoffs_path, automation_policy,
+            engine_settings, created_at, updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             description = excluded.description,
@@ -41,6 +41,8 @@ export const seedDatabase = (database: DatabaseSync): void => {
             tasks_path = excluded.tasks_path,
             workflows_path = excluded.workflows_path,
             handoffs_path = excluded.handoffs_path,
+            automation_policy = excluded.automation_policy,
+            engine_settings = excluded.engine_settings,
             created_at = excluded.created_at,
             updated_at = excluded.updated_at
         `,
@@ -61,6 +63,8 @@ export const seedDatabase = (database: DatabaseSync): void => {
         seedProject.tasksPath,
         seedProject.workflowsPath,
         seedProject.handoffsPath,
+        json(seedProject.automationPolicy),
+        json(seedProject.engineSettings),
         seedProject.createdAt,
         seedProject.updatedAt,
       );
