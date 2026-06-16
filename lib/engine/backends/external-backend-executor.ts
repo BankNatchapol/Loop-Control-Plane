@@ -3,6 +3,7 @@ import type { LoopBoardRepository } from "@/lib/db/loopboard-repository";
 import type { BackendAdapter } from "@/lib/engine/backends/backend-adapter";
 import { buildBackendExecutionContext } from "@/lib/engine/backends/backend-adapter";
 import { backendResultToExecutorResult } from "@/lib/engine/backends/backend-common";
+import { createAgentOrchestratorBackendAdapter } from "@/lib/engine/backends/agent-orchestrator-backend";
 import {
   createClaudeCodeBackendAdapter,
   createCodexBackendAdapter,
@@ -107,5 +108,11 @@ export const createExternalBackendExecutors = (
     createExternalBackendExecutor(createCursorBackendAdapter(adapterDeps), deps),
     createExternalBackendExecutor(createClaudeCodeBackendAdapter(adapterDeps), deps),
     createExternalBackendExecutor(createCodexBackendAdapter(adapterDeps), deps),
+    createExternalBackendExecutor(
+      createAgentOrchestratorBackendAdapter({
+        repository: deps.repository,
+      }),
+      deps,
+    ),
   ];
 };

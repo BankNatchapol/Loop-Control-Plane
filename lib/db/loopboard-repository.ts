@@ -830,6 +830,27 @@ const normalizeProjectEngineSettings = (
     settings.defaultReviewBackend = input.defaultReviewBackend;
   }
 
+  if (input.agentOrchestrator && typeof input.agentOrchestrator === "object") {
+    const ao = input.agentOrchestrator;
+    settings.agentOrchestrator = {
+      ...(typeof ao.enabled === "boolean" ? { enabled: ao.enabled } : {}),
+      ...(typeof ao.configPath === "string" && ao.configPath.trim()
+        ? { configPath: ao.configPath.trim() }
+        : {}),
+      ...(typeof ao.projectId === "string" && ao.projectId.trim()
+        ? { projectId: ao.projectId.trim() }
+        : {}),
+      ...(typeof ao.dashboardUrl === "string" && ao.dashboardUrl.trim()
+        ? { dashboardUrl: ao.dashboardUrl.trim() }
+        : {}),
+      ...(typeof ao.pollIntervalMs === "number" &&
+      Number.isInteger(ao.pollIntervalMs) &&
+      ao.pollIntervalMs > 0
+        ? { pollIntervalMs: ao.pollIntervalMs }
+        : {}),
+    };
+  }
+
   return settings;
 };
 

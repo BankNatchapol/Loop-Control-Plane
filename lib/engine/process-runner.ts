@@ -20,7 +20,8 @@ export type ProcessCommandProfile =
   | "gh"
   | "cursor"
   | "claude"
-  | "codex";
+  | "codex"
+  | "ao";
 
 export type ProcessProfileDefinition = {
   profile: ProcessCommandProfile;
@@ -116,6 +117,7 @@ const PROFILE_COMMANDS: Record<
   cursor: { command: "cursor", defaultArgs: [], placeholder: false },
   claude: { command: "claude", defaultArgs: [], placeholder: false },
   codex: { command: "codex", defaultArgs: [], placeholder: false },
+  ao: { command: "ao", defaultArgs: [], placeholder: false },
 };
 
 const ALLOWED_COMMANDS = new Set<string>([

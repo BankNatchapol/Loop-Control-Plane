@@ -130,6 +130,7 @@ export const IMPLEMENTED_EXECUTOR_BACKENDS: readonly ExecutorBackend[] = [
   "cursor",
   "claude-code",
   "codex",
+  "agent-orchestrator",
 ] as const;
 
 export const isExecutorBackend = (value: unknown): value is ExecutorBackend =>
@@ -452,11 +453,6 @@ export const resolveExecutorTarget = (
   const availability = describeExecutorBackendAvailability(backend);
   if (!availability.available) {
     reasons.push(availability.message);
-    if (backend === "agent-orchestrator") {
-      reasons.push(
-        "Agent Orchestrator adapter arrives in a later Phase 04 task.",
-      );
-    }
 
     return {
       ok: false,

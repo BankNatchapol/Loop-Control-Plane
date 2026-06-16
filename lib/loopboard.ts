@@ -154,9 +154,20 @@ export interface ProjectAutomationPolicy {
   highRiskManualOnly: boolean;
 }
 
+export type ProjectAgentOrchestratorSettings = {
+  enabled?: boolean;
+  /** Repo-relative path to `agent-orchestrator.yaml` or portfolio config file. */
+  configPath?: string;
+  /** Key under `projects:` in the AO config file. */
+  projectId?: string;
+  dashboardUrl?: string;
+  pollIntervalMs?: number;
+};
+
 export type ProjectEngineSettings = {
   defaultTaskBackend?: import("@/lib/engine/loop-engine-types").ExecutorBackend;
   defaultReviewBackend?: import("@/lib/engine/loop-engine-types").ExecutorBackend;
+  agentOrchestrator?: ProjectAgentOrchestratorSettings;
 };
 
 export const defaultProjectEngineSettings: ProjectEngineSettings = {};
