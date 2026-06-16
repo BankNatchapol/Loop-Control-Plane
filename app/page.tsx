@@ -3487,8 +3487,13 @@ export default function Home() {
       describeEffectiveAutomationPolicy({
         automationSettings: boardData.automationSettings,
         projectPolicy: selectedProject?.automationPolicy,
+        engineSettings: selectedProject?.engineSettings,
       }),
-    [boardData.automationSettings, selectedProject?.automationPolicy],
+    [
+      boardData.automationSettings,
+      selectedProject?.automationPolicy,
+      selectedProject?.engineSettings,
+    ],
   );
   const taskRunJobsByTaskId = useMemo(() => {
     const map = new Map<string, EngineJobSummary>();

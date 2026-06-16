@@ -21,6 +21,7 @@ import type {
 } from "@/lib/engine/loop-engine-types";
 import {
   defaultAutomationSettings,
+  evaluateEnginePolicy,
   evaluateGlobalAutomationPolicy,
   type AutomationSettings,
   type PolicyDecision,
@@ -356,7 +357,10 @@ export class LoopScheduler {
   start(
     automationSettings: AutomationSettings = this.repository.getAutomationSettings(),
   ): EngineSchedulerStatus {
-    const policy = evaluateGlobalAutomationPolicy(automationSettings);
+    const policy = evaluateEnginePolicy({
+      operation: "scheduler-control",
+      automationSettings,
+    });
     if (policy.kind === "deny") {
       throw new LoopSchedulerError(policy.message, policy.code, policy.reasons);
     }
@@ -402,7 +406,10 @@ export class LoopScheduler {
     const now = nowIso();
     const schedulerStatus = this.repository.getEngineSchedulerStatus();
     const automationSettings = this.repository.getAutomationSettings();
-    const policy = evaluateGlobalAutomationPolicy(automationSettings);
+    const policy = evaluateEnginePolicy({
+      operation: "scheduler-control",
+      automationSettings,
+    });
 
     const engineSync = await syncInFlightEngineJobs({
       repository: this.repository,

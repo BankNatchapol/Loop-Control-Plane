@@ -22,7 +22,7 @@ export async function POST(request: Request) {
     if (
       mode === "automated" &&
       result.plan.action === "skip" &&
-      result.plan.code === "global_auto_run_disabled"
+      result.plan.code === "engine_global_auto_run_required"
     ) {
       throw new LoopSchedulerError(
         result.plan.reason,

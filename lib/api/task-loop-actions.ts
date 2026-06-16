@@ -11,6 +11,9 @@ import {
   type TaskLoopCandidate,
   type TaskLoopSkipReason,
 } from "@/lib/engine/task-loop-planner";
+import {
+  assertEnginePolicyAllowed,
+} from "@/lib/policies/automation-policy";
 import type { PolicyDecision } from "@/lib/policies/automation-policy";
 
 export type TaskLoopScanResponse = {
@@ -97,6 +100,16 @@ export const enqueueTaskLoop = (
 ): TaskLoopEnqueueResponse => {
   const task = repository.getTask(input.taskId);
   const project = repository.getProject(task.projectId);
+
+  if (input.automated) {
+    assertEnginePolicyAllowed({
+      operation: "scheduler-control",
+      automationSettings: repository.getAutomationSettings(),
+      projectPolicy: project.automationPolicy,
+      engineSettings: project.engineSettings,
+    });
+  }
+
   const policy = evaluateTaskPickupPolicy(
     repository,
     task,

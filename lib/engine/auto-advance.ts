@@ -3,8 +3,11 @@ import type { EngineJob } from "@/lib/engine/loop-engine-types";
 import { parseTaskRunJobPayload } from "@/lib/engine/loop-engine-types";
 import type { Project, WorkflowLogEntry, WorkflowNode, WorkflowRun } from "@/lib/loopboard";
 import {
-  defaultAutomationSettings,
+  evaluateEnginePolicy,
+  isWorkflowHardStopNode,
+  WORKFLOW_HARD_STOP_NODE_TYPES,
   type AutomationSettings,
+  type WorkflowHardStopNodeType,
 } from "@/lib/policies/automation-policy";
 import { runNextWorkflowStep } from "@/lib/workflows/workflow-runner";
 
@@ -35,26 +38,18 @@ export type AutoAdvanceResult = {
   pauseReason?: AutoAdvanceStopReason;
 };
 
-export const WORKFLOW_HARD_STOP_NODE_TYPES = [
-  "merge",
-  "manual-claude-code-edit",
-] as const;
-
-export type WorkflowHardStopNodeType =
-  (typeof WORKFLOW_HARD_STOP_NODE_TYPES)[number];
-
-export const isWorkflowHardStopNode = (
-  node: Pick<WorkflowNode, "type" | "mode">,
-): boolean =>
-  (WORKFLOW_HARD_STOP_NODE_TYPES as readonly string[]).includes(node.type) ||
-  node.mode === "human";
+export { isWorkflowHardStopNode, WORKFLOW_HARD_STOP_NODE_TYPES };
+export type { WorkflowHardStopNodeType };
 
 export const isProjectAutoAdvanceEnabled = (
   project: Pick<Project, "engineSettings">,
-  automationSettings: AutomationSettings = defaultAutomationSettings,
+  automationSettings: AutomationSettings,
 ): boolean =>
-  automationSettings.globalAutoRunEnabled &&
-  project.engineSettings.autoAdvanceEnabled === true;
+  evaluateEnginePolicy({
+    operation: "auto-advance",
+    automationSettings,
+    engineSettings: project.engineSettings,
+  }).kind === "allow";
 
 const pauseKindFromPolicyCode = (code: string): AutoAdvanceStopKind => {
   if (code.includes("deny") || code.includes("manual_only") || code.includes("disabled")) {
@@ -207,16 +202,19 @@ export const maybeAutoAdvanceWorkflowRun = (
   const automationSettings = repository.getAutomationSettings();
 
   if (!isProjectAutoAdvanceEnabled(project, automationSettings)) {
+    const autoAdvancePolicy = evaluateEnginePolicy({
+      operation: "auto-advance",
+      automationSettings,
+      engineSettings: project.engineSettings,
+      projectPolicy: project.automationPolicy,
+    });
+
     return {
       action: "skipped",
       pauseReason: {
         kind: "disabled",
-        code: project.engineSettings.autoAdvanceEnabled
-          ? "global_auto_run_disabled"
-          : "project_auto_advance_disabled",
-        message: project.engineSettings.autoAdvanceEnabled
-          ? "Global auto-run is disabled; workflow auto-advance is inactive."
-          : "Project auto-advance is disabled; enable it in project engine settings.",
+        code: autoAdvancePolicy.code,
+        message: autoAdvancePolicy.message,
         workflowRunId,
       },
     };

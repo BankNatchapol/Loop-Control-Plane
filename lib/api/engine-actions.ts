@@ -20,6 +20,7 @@ import {
   stopSchedulerBackgroundTicks,
 } from "@/lib/engine/scheduler-interval";
 import {
+  assertEnginePolicyAllowed,
   describeEffectiveAutomationPolicy,
   type PolicyDecision,
 } from "@/lib/policies/automation-policy";
@@ -422,6 +423,12 @@ export const getEngineStatus = (
     recentJobs,
     automationPolicy: describeEffectiveAutomationPolicy({
       automationSettings,
+      ...(projectId
+        ? {
+            projectPolicy: repository.getProject(projectId).automationPolicy,
+            engineSettings: repository.getProject(projectId).engineSettings,
+          }
+        : {}),
     }),
     autoAdvance,
     ...(latestRunForResume
@@ -442,6 +449,11 @@ export const getEngineStatus = (
 export const startEngineScheduler = (
   repository: LoopBoardRepository,
 ): EngineSchedulerActionResponse => {
+  assertEnginePolicyAllowed({
+    operation: "scheduler-control",
+    automationSettings: repository.getAutomationSettings(),
+  });
+
   const scheduler = new LoopScheduler(repository).start();
   startSchedulerBackgroundTicks();
 

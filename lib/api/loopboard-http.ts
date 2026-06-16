@@ -11,6 +11,7 @@ import { ProjectOpenActionError } from "@/lib/projects/project-open-actions";
 import { TaskOpenActionError } from "@/lib/tasks/task-open-actions";
 import { LoopSchedulerError } from "@/lib/engine/loop-scheduler";
 import { EngineJobRecoveryError } from "@/lib/engine/engine-job-recovery";
+import { EnginePolicyError } from "@/lib/policies/automation-policy";
 import { WorkflowFileError } from "@/lib/workflows/workflow-files";
 
 export type ApiSuccess<T> = {
@@ -76,6 +77,10 @@ export const handleApiError = (error: unknown) => {
   }
 
   if (error instanceof EngineJobRecoveryError) {
+    return jsonError(error.message, error.statusCode, error.code);
+  }
+
+  if (error instanceof EnginePolicyError) {
     return jsonError(error.message, error.statusCode, error.code);
   }
 

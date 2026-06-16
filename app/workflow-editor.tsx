@@ -284,8 +284,9 @@ export function WorkflowEditor({
       describeEffectiveAutomationPolicy({
         automationSettings,
         projectPolicy: project?.automationPolicy,
+        engineSettings: project?.engineSettings,
       }),
-    [automationSettings, project?.automationPolicy],
+    [automationSettings, project?.automationPolicy, project?.engineSettings],
   );
   const workflowPauseReason = useMemo(
     () =>

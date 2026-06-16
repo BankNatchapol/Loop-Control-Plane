@@ -11,6 +11,7 @@ related:
   - '[[Workflow-Editor-Runner]]'
   - '[[GitHub-Issue-Bridge]]'
   - '[[Human-Takeover]]'
+  - '[[Loop-Execution-Engine]]'
 ---
 
 # Risk Policy
@@ -105,6 +106,28 @@ All policy evaluations return a `PolicyDecision` with:
 | `workflow_medium_risk_review_gate` | requires-approval | Medium-risk automated node when `mediumRiskRequiresReview` is on |
 | `workflow_high_risk_manual_only` | deny | High-risk automated node when `highRiskManualOnly` is on |
 | `workflow_node_allowed` | allow | All checks passed |
+
+### Engine Automation Policy Codes
+
+The loop execution engine (`lib/policies/automation-policy.ts` → `evaluateEnginePolicy`) wraps task and workflow policy for scheduler ticks, auto-advance, and automated task pickup. Engine routes call these helpers — there are no silent bypass paths for automated execution.
+
+| Code | Kind | Trigger |
+|------|------|---------|
+| `engine_global_auto_run_required` | deny | Scheduler start, automated tick, or automated enqueue when `globalAutoRunEnabled` is false |
+| `engine_scheduler_allowed` | allow | Global auto-run enabled; scheduler automation permitted |
+| `engine_auto_advance_global_required` | deny | Project auto-advance enabled but global auto-run is off |
+| `engine_auto_advance_project_disabled` | deny | Global auto-run on but `engineSettings.autoAdvanceEnabled` is false |
+| `engine_auto_advance_allowed` | allow | Both global auto-run and project auto-advance are enabled |
+| `engine_high_risk_task_auto_blocked` | deny | Automated task-loop pickup for high-risk tasks |
+| `engine_critical_risk_task_auto_blocked` | deny | Automated task-loop pickup for critical-risk tasks |
+| `engine_project_blocks_auto_task_execution` | deny | Project blocks low-risk automatic task execution |
+| `engine_workflow_merge_blocked` | deny | Auto-advance reaches a `merge` node |
+| `engine_workflow_hard_stop` | deny | Auto-advance reaches `manual-claude-code-edit` or human-mode nodes |
+| `engine_workflow_manual_only_blocked` | deny | Auto-advance reaches manual-only or critical workflow nodes |
+| `engine_workflow_high_risk_blocked` | deny | Auto-advance reaches high-risk automated workflow nodes |
+| `engine_automation_policy_active` | allow | Effective engine + project automation summary for UI display |
+
+See [[Loop-Execution-Engine]] for scheduler tick orchestration, auto-advance chaining, and operator recovery controls.
 
 ## Task Approval Gates
 

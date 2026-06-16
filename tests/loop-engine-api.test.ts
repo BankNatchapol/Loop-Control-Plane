@@ -188,7 +188,7 @@ describe("Loop engine API routes", () => {
       assert.equal(response.status, 403);
       assert.equal(payload.ok, false);
       if (!payload.ok) {
-        assert.equal(payload.error.code, "global_auto_run_disabled");
+        assert.equal(payload.error.code, "engine_global_auto_run_required");
       }
     });
   });
@@ -282,7 +282,7 @@ describe("Loop engine API routes", () => {
       assert.equal(response.status, 403);
       assert.equal(payload.ok, false);
       if (!payload.ok) {
-        assert.equal(payload.error.code, "global_auto_run_disabled");
+        assert.equal(payload.error.code, "engine_global_auto_run_required");
       }
     });
   });

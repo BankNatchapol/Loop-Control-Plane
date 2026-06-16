@@ -66,7 +66,53 @@ export const defaultAutomationSettings: AutomationSettings = {
 export type EffectiveAutomationPolicyInput = {
   automationSettings?: AutomationSettings;
   projectPolicy?: ProjectAutomationPolicy;
+  engineSettings?: { autoAdvanceEnabled?: boolean };
 };
+
+export type EnginePolicyOperation =
+  | "scheduler-control"
+  | "auto-advance"
+  | "automated-task-pickup"
+  | "automated-workflow-step";
+
+export type EnginePolicyInput = {
+  operation: EnginePolicyOperation;
+  automationSettings?: AutomationSettings;
+  projectPolicy?: ProjectAutomationPolicy;
+  engineSettings?: { autoAdvanceEnabled?: boolean };
+  task?: TaskPolicyInput["task"];
+  node?: WorkflowNodePolicyInput["node"];
+  approved?: boolean;
+};
+
+export const WORKFLOW_HARD_STOP_NODE_TYPES = [
+  "merge",
+  "manual-claude-code-edit",
+] as const;
+
+export type WorkflowHardStopNodeType =
+  (typeof WORKFLOW_HARD_STOP_NODE_TYPES)[number];
+
+export const isWorkflowHardStopNode = (
+  node: Pick<WorkflowNode, "type" | "mode">,
+): boolean =>
+  (WORKFLOW_HARD_STOP_NODE_TYPES as readonly string[]).includes(node.type) ||
+  node.mode === "human";
+
+export class EnginePolicyError extends Error {
+  readonly code: string;
+  readonly reasons: string[];
+
+  constructor(
+    readonly decision: PolicyDecision,
+    readonly statusCode = 403,
+  ) {
+    super(decision.message);
+    this.name = "EnginePolicyError";
+    this.code = decision.code;
+    this.reasons = decision.reasons;
+  }
+}
 
 const riskRank: Record<RiskLevel, number> = {
   low: 0,
@@ -136,10 +182,14 @@ const decision = ({
 const automationSettingsReasons = ({
   automationSettings = defaultAutomationSettings,
   projectPolicy = defaultProjectAutomationPolicy,
+  engineSettings,
 }: EffectiveAutomationPolicyInput): string[] => [
   automationSettings.globalAutoRunEnabled
     ? "Global auto-run is enabled."
     : "Global auto-run is disabled.",
+  engineSettings?.autoAdvanceEnabled
+    ? "Project auto-advance is enabled (requires global auto-run)."
+    : "Project auto-advance is disabled.",
   projectPolicy.allowLowRiskAutoIssueCreation
     ? "Project allows low-risk automatic GitHub issue creation."
     : "Project blocks low-risk automatic GitHub issue creation.",
@@ -155,6 +205,8 @@ const automationSettingsReasons = ({
   projectPolicy.highRiskManualOnly
     ? "Project keeps high-risk automation manual-only."
     : "Project allows high-risk automation when explicitly approved.",
+  "Engine scheduler and automated ticks require global auto-run.",
+  "High/critical risk tasks and manual-only workflow nodes never auto-execute.",
 ];
 
 const deniesAutomatedGlobalSetting = (
@@ -559,23 +611,247 @@ export const evaluateGlobalAutomationPolicy = (
         reasons: ["Loop Control Plane keeps background automation off unless explicitly enabled."],
       });
 
+const mapTaskPickupToEnginePolicy = (
+  taskPolicy: PolicyDecision,
+): PolicyDecision => {
+  if (taskPolicy.kind === "allow") {
+    return taskPolicy;
+  }
+
+  if (taskPolicy.code === "global_auto_run_disabled") {
+    return decision({
+      ...taskPolicy,
+      code: "engine_global_auto_run_required",
+      message: "Engine automated task pickup requires global auto-run.",
+    });
+  }
+
+  if (
+    taskPolicy.code === "high_risk_manual_only" &&
+    (taskPolicy.effectiveRisk === "high" || taskPolicy.effectiveRisk === "critical")
+  ) {
+    return decision({
+      ...taskPolicy,
+      code:
+        taskPolicy.effectiveRisk === "critical"
+          ? "engine_critical_risk_task_auto_blocked"
+          : "engine_high_risk_task_auto_blocked",
+      message:
+        taskPolicy.effectiveRisk === "critical"
+          ? "Critical risk tasks cannot be picked up automatically by the engine."
+          : "High and critical risk tasks cannot be picked up automatically by the engine.",
+    });
+  }
+
+  if (taskPolicy.code === "project_blocks_low_risk_auto_task_execution") {
+    return decision({
+      ...taskPolicy,
+      code: "engine_project_blocks_auto_task_execution",
+      message: "This project blocks low-risk automatic engine task pickup.",
+    });
+  }
+
+  return taskPolicy;
+};
+
+const mapWorkflowStepToEnginePolicy = (
+  node: Pick<WorkflowNode, "type" | "name" | "mode" | "riskPolicy">,
+  nodePolicy: PolicyDecision,
+): PolicyDecision => {
+  if (isWorkflowHardStopNode(node)) {
+    return decision({
+      kind: "deny",
+      code:
+        node.type === "merge"
+          ? "engine_workflow_merge_blocked"
+          : "engine_workflow_hard_stop",
+      message: `${node.name} requires manual operator action and cannot auto-execute.`,
+      reasons: [
+        `Workflow node type "${node.type}" is a hard stop for engine auto-advance.`,
+      ],
+      effectiveRisk: nodePolicy.effectiveRisk,
+    });
+  }
+
+  if (nodePolicy.kind === "allow") {
+    return nodePolicy;
+  }
+
+  if (
+    node.riskPolicy === "manual-only" ||
+    node.riskPolicy === "critical" ||
+    node.mode === "human" ||
+    node.mode === "semi"
+  ) {
+    return decision({
+      ...nodePolicy,
+      kind: "deny",
+      code: "engine_workflow_manual_only_blocked",
+      message: "Manual-only, critical, and human workflow nodes cannot auto-execute.",
+    });
+  }
+
+  if (nodePolicy.code === "workflow_high_risk_manual_only") {
+    return decision({
+      ...nodePolicy,
+      code: "engine_workflow_high_risk_blocked",
+      message: "High-risk workflow nodes cannot auto-execute through the engine.",
+    });
+  }
+
+  if (nodePolicy.code === "global_auto_run_disabled") {
+    return decision({
+      ...nodePolicy,
+      code: "engine_global_auto_run_required",
+      message: "Engine automated workflow steps require global auto-run.",
+    });
+  }
+
+  return nodePolicy;
+};
+
+export const evaluateEnginePolicy = ({
+  operation,
+  automationSettings = defaultAutomationSettings,
+  projectPolicy = defaultProjectAutomationPolicy,
+  engineSettings,
+  task,
+  node,
+  approved = false,
+}: EnginePolicyInput): PolicyDecision => {
+  if (operation === "scheduler-control") {
+    const globalDecision = evaluateGlobalAutomationPolicy(automationSettings);
+    if (globalDecision.kind === "deny") {
+      return decision({
+        kind: "deny",
+        code: "engine_global_auto_run_required",
+        message: "Engine scheduler and automated ticks require global auto-run.",
+        reasons: automationSettingsReasons({
+          automationSettings,
+          projectPolicy,
+          engineSettings,
+        }),
+      });
+    }
+
+    return decision({
+      kind: "allow",
+      code: "engine_scheduler_allowed",
+      message: "Engine scheduler automation is allowed.",
+      reasons: automationSettingsReasons({
+        automationSettings,
+        projectPolicy,
+        engineSettings,
+      }),
+    });
+  }
+
+  if (operation === "auto-advance") {
+    if (!automationSettings.globalAutoRunEnabled) {
+      return decision({
+        kind: "deny",
+        code: "engine_auto_advance_global_required",
+        message: "Workflow auto-advance requires global auto-run.",
+        reasons: automationSettingsReasons({
+          automationSettings,
+          projectPolicy,
+          engineSettings,
+        }),
+      });
+    }
+
+    if (engineSettings?.autoAdvanceEnabled !== true) {
+      return decision({
+        kind: "deny",
+        code: "engine_auto_advance_project_disabled",
+        message: "Project auto-advance is disabled.",
+        reasons: automationSettingsReasons({
+          automationSettings,
+          projectPolicy,
+          engineSettings,
+        }),
+      });
+    }
+
+    return decision({
+      kind: "allow",
+      code: "engine_auto_advance_allowed",
+      message: "Workflow auto-advance is active.",
+      reasons: automationSettingsReasons({
+        automationSettings,
+        projectPolicy,
+        engineSettings,
+      }),
+    });
+  }
+
+  if (operation === "automated-task-pickup" && task) {
+    return mapTaskPickupToEnginePolicy(
+      evaluateTaskPolicy({
+        operation: "assign-ai",
+        task,
+        automated: true,
+        automationSettings,
+        projectPolicy,
+      }),
+    );
+  }
+
+  if (operation === "automated-workflow-step" && node) {
+    return mapWorkflowStepToEnginePolicy(
+      node,
+      evaluateWorkflowNodePolicy({
+        node,
+        automated: true,
+        approved,
+        automationSettings,
+        projectPolicy,
+      }),
+    );
+  }
+
+  return decision({
+    kind: "allow",
+    code: "engine_policy_allowed",
+    message: "Engine policy allows this operation.",
+    reasons: [],
+  });
+};
+
+export const assertEnginePolicyAllowed = (input: EnginePolicyInput): PolicyDecision => {
+  const policy = evaluateEnginePolicy(input);
+  if (policy.kind === "deny") {
+    throw new EnginePolicyError(policy);
+  }
+
+  return policy;
+};
+
 export const describeEffectiveAutomationPolicy = ({
   automationSettings = defaultAutomationSettings,
   projectPolicy = defaultProjectAutomationPolicy,
+  engineSettings,
 }: EffectiveAutomationPolicyInput): PolicyDecision => {
   const globalDecision = evaluateGlobalAutomationPolicy(automationSettings);
+  const reasons = automationSettingsReasons({
+    automationSettings,
+    projectPolicy,
+    engineSettings,
+  });
 
   if (globalDecision.kind === "deny") {
     return decision({
-      ...globalDecision,
-      reasons: automationSettingsReasons({ automationSettings, projectPolicy }),
+      kind: "deny",
+      code: "engine_global_auto_run_required",
+      message: "Global auto-run is disabled; engine automation is blocked.",
+      reasons,
     });
   }
 
   return decision({
     kind: "allow",
-    code: "project_automation_policy_active",
-    message: "Global auto-run is enabled and project automation settings are active.",
-    reasons: automationSettingsReasons({ automationSettings, projectPolicy }),
+    code: "engine_automation_policy_active",
+    message: "Global auto-run is enabled and engine automation settings are active.",
+    reasons,
   });
 };

@@ -91,7 +91,7 @@ describe("task loop planner", () => {
         (entry) => entry.taskId === "task-local-persistence-reset",
       );
       assert.ok(persistenceTask);
-      assert.equal(persistenceTask.code, "global_auto_run_disabled");
+      assert.equal(persistenceTask.code, "engine_global_auto_run_required");
       assert.equal(scan.eligible.length, 0);
     });
   });
@@ -150,7 +150,7 @@ describe("task loop planner", () => {
       const task = repository.getTask("task-local-persistence-reset");
       const skipEvent = task.events.find((event) => event.type === "ENGINE_PICKUP_SKIPPED");
       assert.ok(skipEvent);
-      assert.equal(skipEvent.metadata?.policyCode, "global_auto_run_disabled");
+      assert.equal(skipEvent.metadata?.policyCode, "engine_global_auto_run_required");
     });
   });
 
@@ -165,7 +165,7 @@ describe("task loop planner", () => {
       });
 
       assert.equal(scan.eligible.length, 0);
-      assert.equal(scan.skipped[0]?.code, "project_blocks_low_risk_auto_task_execution");
+      assert.equal(scan.skipped[0]?.code, "engine_project_blocks_auto_task_execution");
     });
   });
 
@@ -208,7 +208,7 @@ describe("task loop planner", () => {
       });
 
       assert.equal(scan.eligible.length, 0);
-      assert.equal(scan.skipped[0]?.code, "high_risk_manual_only");
+      assert.equal(scan.skipped[0]?.code, "engine_high_risk_task_auto_blocked");
     });
   });
 

@@ -261,7 +261,7 @@ describe("Automation policy", () => {
     });
 
     assert.equal(policy.kind, "allow");
-    assert.equal(policy.code, "project_automation_policy_active");
+    assert.equal(policy.code, "engine_automation_policy_active");
     assert.ok(policy.reasons.some((reason) => reason.includes("low-risk")));
   });
 });

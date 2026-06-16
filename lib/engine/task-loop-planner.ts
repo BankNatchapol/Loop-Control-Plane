@@ -12,6 +12,7 @@ import {
 } from "@/lib/engine/loop-engine-types";
 import type { KanbanStatus, Project, TaskOwner } from "@/lib/loopboard";
 import {
+  evaluateEnginePolicy,
   evaluateTaskActionPolicy,
   type PolicyDecision,
   type PolicyDecisionKind,
@@ -133,14 +134,21 @@ export const evaluateTaskPickupPolicy = (
   project: Project,
   automated: boolean,
 ): PolicyDecision =>
-  evaluateTaskActionPolicy({
-    action: "assign-ai",
-    task,
-    automated,
-    approved: Boolean(task.github.aoReadyApprovedAt),
-    automationSettings: repository.getAutomationSettings(),
-    projectPolicy: project.automationPolicy,
-  });
+  automated
+    ? evaluateEnginePolicy({
+        operation: "automated-task-pickup",
+        task,
+        automationSettings: repository.getAutomationSettings(),
+        projectPolicy: project.automationPolicy,
+      })
+    : evaluateTaskActionPolicy({
+        action: "assign-ai",
+        task,
+        automated: false,
+        approved: Boolean(task.github.aoReadyApprovedAt),
+        automationSettings: repository.getAutomationSettings(),
+        projectPolicy: project.automationPolicy,
+      });
 
 const resolveExecutorConfig = (
   task: PersistedTask,

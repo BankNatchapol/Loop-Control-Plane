@@ -21,6 +21,7 @@ import {
 } from "@/lib/api/engine-actions";
 import { LoopBoardRepository } from "@/lib/db/loopboard-repository";
 import { LoopSchedulerError } from "@/lib/engine/loop-scheduler";
+import { EnginePolicyError } from "@/lib/policies/automation-policy";
 import { seedProject } from "@/lib/loopboard";
 
 const withRepository = (
@@ -203,8 +204,8 @@ describe("Loop engine API actions", () => {
       assert.throws(
         () => startEngineScheduler(repository),
         (error: unknown) => {
-          assert.ok(error instanceof LoopSchedulerError);
-          assert.equal(error.code, "global_auto_run_disabled");
+          assert.ok(error instanceof EnginePolicyError);
+          assert.equal(error.code, "engine_global_auto_run_required");
           return true;
         },
       );

@@ -267,7 +267,7 @@ describe("Loop scheduler service", () => {
         () => scheduler.start(defaultAutomationSettings),
         (error: unknown) => {
           assert.ok(error instanceof LoopSchedulerError);
-          assert.equal(error.code, "global_auto_run_disabled");
+          assert.equal(error.code, "engine_global_auto_run_required");
           return true;
         },
       );
