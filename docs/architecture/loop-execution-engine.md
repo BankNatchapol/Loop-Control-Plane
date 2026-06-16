@@ -13,6 +13,7 @@ related:
   - '[[Spec-Kit-Importer]]'
   - '[[GitHub-Issue-Bridge]]'
   - '[[Risk-Policy]]'
+  - '[[Human-Takeover]]'
   - '[[Security-Policy]]'
 ---
 
@@ -92,7 +93,7 @@ Helpers `readExecutorConfig`, `validateExecutorConfig`, and `withExecutorConfig`
 | Kind | Usage |
 |------|-------|
 | `demo-ping` | Dashboard **Run Demo Job** — stub backend smoke test |
-| `task-run` | Reserved — future task-scoped executor runs |
+| `task-run` | **Implemented (Phase 02)** — task-scoped executor runs with context handoff |
 | `workflow-step` | **Implemented (Phase 03)** — bridge from workflow runner to node executors |
 
 ### Job statuses
@@ -207,7 +208,81 @@ Approval-gate nodes (`human-input`, `human-review`, `manual-claude-code-edit`, `
 
 Subprocess safety (allowlisted commands, cwd validation, timeouts, redacted logs) lives in `lib/engine/process-runner.ts`. Full node mapping, config schema, and editor UI are documented in [[Workflow-Node-Executors]].
 
-Verification: `npm run db:migrate`, `npm run lint`, `npm run typecheck`, and `npm test` (228 tests). Feature Development Loop walkthrough coverage lives in `tests/workflow-executor-verification.test.ts` (human-input → spec-kit-actions with mocked CLI → human-review → import-tasks, confirming board tasks and workflow events).
+Verification: `npm run db:migrate`, `npm run lint`, `npm run typecheck`, and `npm test` (257 tests). Feature Development Loop walkthrough coverage lives in `tests/workflow-executor-verification.test.ts` (human-input → spec-kit-actions with mocked CLI → human-review → import-tasks, confirming board tasks and workflow events).
+
+## Task Loop
+
+Phase 02 wires the engine to the Kanban board so Ready tasks can be picked up automatically, given generated context, executed through a configured backend, and advanced without manual clicks. The loop honors [[Risk-Policy]] gates, [[Human-Takeover]] semantics (`ai-paused`, human owner claims), and conservative defaults.
+
+```mermaid
+sequenceDiagram
+  participant Scheduler as LoopScheduler
+  participant Planner as task-loop-planner
+  participant Policy as automation-policy
+  participant SQLite as engine_jobs
+  participant Executor as task-run-executor
+  participant Context as TaskContextService
+  participant Board as Kanban task
+
+  Scheduler->>Policy: evaluate global auto-run (automated tick)
+  Scheduler->>Planner: scanTaskLoopCandidates + enqueueTaskLoopJobs
+  Planner->>Policy: evaluateTaskActionPolicy assign-ai
+  Planner->>SQLite: enqueue task-run (dedupe per task)
+  Scheduler->>SQLite: dequeue task-run job
+  Scheduler->>Executor: executeTaskRunJob
+  Executor->>Context: generate task.md, context.md, handoff.md, events.jsonl
+  Executor->>Board: AI Running → Needs Review (or Done for trivial demo)
+  Executor->>SQLite: completed + ENGINE_TASK_* events
+```
+
+### Eligibility and policy gates
+
+The planner (`lib/engine/task-loop-planner.ts`) scans board tasks and enqueues `task-run` jobs only when all of the following hold:
+
+| Gate | Rule |
+|------|------|
+| **Status** | Task is in the Ready column (`status: ready`) |
+| **Owner** | `unassigned` or `ai` — human-owned or pairing tasks are skipped |
+| **Human takeover** | No `ai-paused` label (active [[Human-Takeover]]) |
+| **Risk policy** | `evaluateTaskActionPolicy({ action: "assign-ai", automated })` returns `allow` |
+| **Low-risk auto execution** | When `automated: true`, project `allowLowRiskAutoTaskExecution` must be enabled (default **false**) |
+| **AO-ready approval** | Medium/high/critical tasks require `aoReadyApprovedAt` unless risk policy allows otherwise |
+| **Dedupe** | No queued or running `task-run` job for the same task id |
+
+Skipped candidates append `ENGINE_PICKUP_SKIPPED` events with explainable policy codes. Manual **Run with Engine** uses `automated: false` and bypasses the global auto-run gate but still evaluates task-level risk and approval rules.
+
+### Scheduler integration
+
+On each **automated** tick when the scheduler is `running` and global auto-run is enabled, `planTaskLoopPickup` enqueues eligible tasks up to `DEFAULT_TASK_LOOP_CONCURRENCY_LIMIT` (1). When global auto-run is off or the scheduler is stopped, automated pickup is skipped; operators can still enqueue a selected task manually from the task detail panel or `POST /api/engine/task-loop/enqueue`.
+
+Project automation settings expose **Allow low-risk auto task execution** (`allowLowRiskAutoTaskExecution`, default false). High/critical risk tasks never auto-execute without explicit approval per [[Risk-Policy]].
+
+### Execution lifecycle
+
+`task-run-executor.ts` handles `task-run` jobs registered via `taskRunHandler` in `createExecutorRegistryForRepository`:
+
+1. **Pickup** — Refresh context files via `TaskContextService`; transition task to AI Running; append `ENGINE_PICKUP` and `ASSIGNED_TO_AI` events.
+2. **Backend resolution** — Payload `executorConfig` → `executor-backend:*` label → workflow node config → `stub` default (tests and safe default; `cursor` only when explicitly configured).
+3. **Invoke** — Swappable `invokeBackend` adapter (stub in Phase 02; real CLI adapters in Phase 04).
+4. **Success** — Move to Needs Review (or Done for tasks labeled `engine-trivial`); append `ENGINE_TASK_COMPLETED`; refresh handoff with result summary.
+5. **Failure** — Retry while `attempt < maxAttempts` (task stays AI Running); otherwise Blocked with `ENGINE_TASK_FAILED` and redacted error text.
+
+### API and UI
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/api/engine/task-loop/scan` | POST | Dry-run planner — returns eligible tasks and skip reasons |
+| `/api/engine/task-loop/enqueue` | POST | Manual enqueue for `{ taskId }` with policy evaluation response |
+
+Client helpers: `scanTaskLoop`, `enqueueTaskLoop` in `lib/api/loopboard-client.ts`.
+
+The task detail **Engine Status** panel shows the latest job id, backend, attempt, last log line, and **Run with Engine** when policy allows. Kanban cards show **engine queued** / **engine running** badges for in-flight jobs. The dashboard polls engine status every 3 seconds and refreshes board data when a `task-run` job completes.
+
+### Verification
+
+End-to-end coverage: `tests/task-loop-integration.test.ts` seeds a low-risk Ready task, enables global auto-run and `allowLowRiskAutoTaskExecution`, ticks the scheduler, and asserts Ready → AI Running → Needs Review with on-disk context artifacts. Planner, executor, scheduler, and policy unit tests live in `tests/task-loop-planner.test.ts`, `tests/task-run-executor.test.ts`, `tests/loop-scheduler.test.ts`, and `tests/automation-policy.test.ts`.
+
+**Manual walkthrough:** Enable global auto-run in dashboard automation settings, enable **Allow low-risk auto task execution** on the project, click **Start Scheduler**, and confirm a seeded Ready low-risk task (e.g. `task-local-persistence-reset`) moves to AI Running then Needs Review with engine badges updating. Disable global auto-run and confirm automated pickup stops while **Run with Engine** remains available on eligible tasks.
 
 ## Key Source Files
 
@@ -223,17 +298,21 @@ Verification: `npm run db:migrate`, `npm run lint`, `npm run typecheck`, and `np
 | `lib/engine/process-runner.ts` | Audited subprocess execution for CLIs |
 | `lib/workflows/workflow-runner.ts` | Graph state machine; enqueues engine jobs |
 | `tests/loop-engine-*.test.ts` | Types, scheduler, repository, API coverage |
+| `lib/engine/task-loop-planner.ts` | Eligibility scan, policy evaluation, task-run enqueue |
+| `lib/engine/task-run-executor.ts` | Context generation, backend invoke, board transitions |
+| `lib/api/task-loop-actions.ts` | Scan/enqueue API action handlers |
+| `app/api/engine/task-loop/**` | Task loop HTTP routes |
+| `tests/task-loop-*.test.ts` | Planner, executor, and integration coverage |
 | `tests/workflow-engine-integration.test.ts` | Trimmed import-tasks → create-github-issues engine path |
 | `tests/workflow-executor-verification.test.ts` | Feature Development Loop walkthrough verification |
 
 ## Intentional Non-Goals (remaining)
 
 - **No real agent CLI backends yet** — Cursor, Claude Code, Codex, and Agent Orchestrator backends are typed and validated but adapters are Phase 04 work.
-- **No task-run automation** — Task cards do not auto-spawn engine jobs.
 - **No global auto-run by default** — Operators must explicitly enable automation before the scheduler runs unattended.
 - **No distributed queue** — Single-process SQLite queue; no Redis, no multi-instance coordination.
 
-Future phases will register real agent executors, wire `task-run` jobs to task context handoff artifacts, and extend review/implementation backends. See [[Workflow-Node-Executors]] for the Phase 03 node-type mapping and config schema.
+Future phases will register real agent executors and extend review/implementation backends beyond the Phase 02 stub adapter. See [[Workflow-Node-Executors]] for the Phase 03 node-type mapping and config schema.
 
 ## Related Documents
 
@@ -242,5 +321,6 @@ Future phases will register real agent executors, wire `task-run` jobs to task c
 - [[Spec-Kit-Importer]] — task import reuse for `import-tasks` workflow steps
 - [[GitHub-Issue-Bridge]] — issue and PR helpers for delivery nodes
 - [[Risk-Policy]] — global auto-run defaults and risk gates
+- [[Human-Takeover]] — ai-paused and human owner semantics for task pickup
 - [[Security-Policy]] — token handling and trusted-input rules
 - [[loop-engine-execution-boundaries]] — Phase 01 inspection notes on reuse boundaries

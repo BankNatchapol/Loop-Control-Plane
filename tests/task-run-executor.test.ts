@@ -275,7 +275,7 @@ describe("task-run executor orchestration", () => {
   });
 
   it("runs through scheduler tick for enqueued task-run jobs", async () => {
-    await withRepository(async (repository, contextRoot) => {
+    await withRepository(async (repository) => {
       repository.updateAutomationSettings({
         globalAutoRunEnabled: true,
       });

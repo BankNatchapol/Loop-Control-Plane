@@ -28,7 +28,7 @@ describe("task loop integration", () => {
     try {
       process.env.LOOPBOARD_TASK_CONTEXT_ROOT = contextRoot;
 
-      let database = new DatabaseSync(databasePath);
+      const database = new DatabaseSync(databasePath);
       applyMigrations(database);
       seedDatabase(database);
 

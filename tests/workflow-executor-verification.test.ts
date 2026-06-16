@@ -21,7 +21,7 @@ import {
 import { dispatchWorkflowStepJob } from "@/lib/engine/executors/workflow-step-dispatcher";
 import { parseWorkflowStepJobPayload } from "@/lib/engine/executors/workflow-step-types";
 import { LoopScheduler } from "@/lib/engine/loop-scheduler";
-import type { ProcessRunResult } from "@/lib/engine/process-runner";
+import type { ProcessRunResult, ProcessRunner } from "@/lib/engine/process-runner";
 import { discoverFeatureArtifacts } from "@/lib/features/feature-artifacts";
 import { seedProject, seedWorkflows } from "@/lib/loopboard";
 import {
@@ -43,7 +43,7 @@ const FIXTURE_TASKS = [
   "- [ ] T002 Verify import-tasks executor creates board tasks",
 ].join("\n");
 
-const createMockSpecKitProcessRunner = (repoPath: string) => ({
+const createMockSpecKitProcessRunner = (repoPath: string): ProcessRunner => ({
   run: async (request: { args?: string[] }): Promise<ProcessRunResult> => {
     const args = request.args ?? [];
     const outputPath = args.at(-1);
@@ -66,7 +66,7 @@ const createMockSpecKitProcessRunner = (repoPath: string) => ({
       args,
     };
   },
-});
+} as unknown as ProcessRunner);
 
 const createVerificationExecutorRegistry = (
   repository: LoopBoardRepository,
@@ -146,12 +146,12 @@ describe("workflow executor verification", () => {
 
       const specKitDelegated = approveWorkflowRunStep({ repository, runId: run.id });
       assert.equal(specKitDelegated.steps.at(-1)?.status, "running");
+      const specKitJobPayload = repository
+        .listEngineJobs({ status: "queued" })
+        .find((job) => job.workflowRunId === run.id)?.payload;
+      assert.ok(specKitJobPayload);
       assert.equal(
-        parseWorkflowStepJobPayload(
-          repository
-            .listEngineJobs({ status: "queued" })
-            .find((job) => job.workflowRunId === run.id)?.payload,
-        )?.nodeType,
+        parseWorkflowStepJobPayload(specKitJobPayload)?.nodeType,
         "spec-kit-actions",
       );
 
