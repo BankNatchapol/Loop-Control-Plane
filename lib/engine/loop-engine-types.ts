@@ -16,9 +16,14 @@ export type EngineJobStatus =
 
 export type EngineSchedulerState = "stopped" | "running" | "paused";
 
+export type ExecutorFanOutConfig = {
+  maxConcurrency: number;
+  issueIds: number[];
+};
+
 export type ExecutorConfig = {
   backend: ExecutorBackend;
-  /** Legacy single command string; prefer `args` for argv-style invocation. */
+  /** Legacy single command string; stub-only. External backends reject shell strings. */
   command?: string;
   /** CLI arguments passed without shell interpolation. */
   args?: string[];
@@ -28,11 +33,34 @@ export type ExecutorConfig = {
   cwd?: string;
   timeoutMs?: number;
   envAllowlist?: string[];
+  /** Generated prompt file path relative to repo root (e.g. `.loopboard/tasks/.../task.md`). */
+  promptFile?: string;
+  /** Linked GitHub issue number for AO handoff or issue-scoped runs. */
+  issueNumber?: number;
+  /** Target git branch for agent worktrees or PR flows. */
+  branch?: string;
+  /** Parallel AO spawn settings for workflow fan-out nodes. */
+  fanOut?: ExecutorFanOutConfig;
+  /** Agent Orchestrator project id from `agent-orchestrator.yaml`. */
+  aoProjectId?: string;
+  /** Optional model id for Cursor / Claude / Codex backends. */
+  model?: string;
 };
 
 export type WorkflowNodeExecutorConfig = Pick<
   ExecutorConfig,
-  "backend" | "args" | "cwd" | "timeoutMs" | "command" | "workingDirectory"
+  | "backend"
+  | "args"
+  | "cwd"
+  | "timeoutMs"
+  | "command"
+  | "workingDirectory"
+  | "promptFile"
+  | "issueNumber"
+  | "branch"
+  | "fanOut"
+  | "aoProjectId"
+  | "model"
 >;
 
 export type EngineRunLogLevel = "info" | "warn" | "error";
@@ -223,6 +251,92 @@ export const validateExecutorConfig = (
     });
   }
 
+  if (value.promptFile !== undefined) {
+    if (typeof value.promptFile !== "string" || value.promptFile.trim().length === 0) {
+      issues.push({
+        field: "promptFile",
+        message: "Prompt file must be a non-empty string path.",
+      });
+    } else if (/[;&|`$<>]/u.test(value.promptFile)) {
+      issues.push({
+        field: "promptFile",
+        message: "Prompt file path cannot contain shell metacharacters.",
+      });
+    }
+  }
+
+  if (value.issueNumber !== undefined) {
+    if (
+      typeof value.issueNumber !== "number" ||
+      !Number.isInteger(value.issueNumber) ||
+      value.issueNumber <= 0
+    ) {
+      issues.push({
+        field: "issueNumber",
+        message: "Issue number must be a positive integer.",
+      });
+    }
+  }
+
+  if (value.branch !== undefined) {
+    if (typeof value.branch !== "string" || value.branch.trim().length === 0) {
+      issues.push({
+        field: "branch",
+        message: "Branch must be a non-empty string.",
+      });
+    }
+  }
+
+  if (value.aoProjectId !== undefined) {
+    if (typeof value.aoProjectId !== "string" || value.aoProjectId.trim().length === 0) {
+      issues.push({
+        field: "aoProjectId",
+        message: "Agent Orchestrator project id must be a non-empty string.",
+      });
+    }
+  }
+
+  if (value.model !== undefined) {
+    if (typeof value.model !== "string" || value.model.trim().length === 0) {
+      issues.push({
+        field: "model",
+        message: "Model must be a non-empty string.",
+      });
+    }
+  }
+
+  if (value.fanOut !== undefined) {
+    if (!isRecord(value.fanOut)) {
+      issues.push({
+        field: "fanOut",
+        message: "Fan-out config must be an object.",
+      });
+    } else {
+      if (
+        typeof value.fanOut.maxConcurrency !== "number" ||
+        !Number.isInteger(value.fanOut.maxConcurrency) ||
+        value.fanOut.maxConcurrency <= 0
+      ) {
+        issues.push({
+          field: "fanOut.maxConcurrency",
+          message: "Fan-out maxConcurrency must be a positive integer.",
+        });
+      }
+
+      if (
+        !Array.isArray(value.fanOut.issueIds) ||
+        !value.fanOut.issueIds.every(
+          (entry) => typeof entry === "number" && Number.isInteger(entry) && entry > 0,
+        )
+      ) {
+        issues.push({
+          field: "fanOut.issueIds",
+          message: "Fan-out issueIds must be an array of positive integers.",
+        });
+      }
+    }
+  }
+
   if (issues.length > 0) {
     return {
       ok: false,
@@ -253,6 +367,24 @@ export const validateExecutorConfig = (
       ...(typeof value.timeoutMs === "number" ? { timeoutMs: value.timeoutMs } : {}),
       ...(isStringArray(value.envAllowlist)
         ? { envAllowlist: value.envAllowlist }
+        : {}),
+      ...(typeof value.promptFile === "string" ? { promptFile: value.promptFile } : {}),
+      ...(typeof value.issueNumber === "number" ? { issueNumber: value.issueNumber } : {}),
+      ...(typeof value.branch === "string" ? { branch: value.branch } : {}),
+      ...(typeof value.aoProjectId === "string" ? { aoProjectId: value.aoProjectId } : {}),
+      ...(typeof value.model === "string" ? { model: value.model } : {}),
+      ...(isRecord(value.fanOut) &&
+      typeof value.fanOut.maxConcurrency === "number" &&
+      Array.isArray(value.fanOut.issueIds)
+        ? {
+            fanOut: {
+              maxConcurrency: value.fanOut.maxConcurrency,
+              issueIds: value.fanOut.issueIds.filter(
+                (entry): entry is number =>
+                  typeof entry === "number" && Number.isInteger(entry) && entry > 0,
+              ),
+            },
+          }
         : {}),
     },
   };
