@@ -251,7 +251,7 @@ describe("agent orchestrator backend adapter", () => {
     }
   });
 
-  it("polls AO status until terminal completion and records external session id", async () => {
+  it("spawns AO session and defers terminal polling to engine sync", async () => {
     const tempDirectory = mkdtempSync(join(tmpdir(), "ao-poll-"));
     writeFileSync(join(tempDirectory, "agent-orchestrator.yaml"), "projects: {}\n");
 
@@ -338,9 +338,10 @@ describe("agent orchestrator backend adapter", () => {
 
       assert.equal(result.success, true);
       assert.equal(result.externalSessionId, "loop-control-plane-42");
-      assert.equal(result.result?.branchLabel, "completed");
-      assert.equal(result.result?.prUrl, "https://github.com/org/repo/pull/9");
+      assert.equal(result.result?.awaitingExternalSync, true);
+      assert.equal(result.result?.branchLabel, "running");
       assert.equal(result.result?.untrusted, true);
+      assert.equal(result.result?.prUrl, undefined);
     } finally {
       rmSync(tempDirectory, { recursive: true, force: true });
     }

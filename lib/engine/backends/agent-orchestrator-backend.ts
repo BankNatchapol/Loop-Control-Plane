@@ -22,6 +22,7 @@ import {
   type ResolvedAgentOrchestratorSettings,
 } from "@/lib/engine/backends/agent-orchestrator-config";
 import { probeCliAvailabilityForBackend } from "@/lib/engine/backends/cli-availability";
+import { ENGINE_JOB_AWAITING_EXTERNAL_SYNC_KEY } from "@/lib/engine/engine-sync-service";
 import { parseTaskRunJobPayload } from "@/lib/engine/loop-engine-types";
 import {
   ProcessRunner,
@@ -502,6 +503,37 @@ export const createAgentOrchestratorBackendAdapter = (
           };
         }
 
+        const primarySession = spawnResult.records[0];
+        const externalSessionId = primarySession?.sessionId;
+
+        if (!isFanOut) {
+          const summary = primarySession
+            ? `Spawned Agent Orchestrator session for issue #${primarySession.issueNumber}.`
+            : "Spawned Agent Orchestrator session.";
+
+          logs.push(
+            backendLogEntry("info", "Agent Orchestrator handoff deferred to engine sync.", {
+              issueNumber: primarySession?.issueNumber,
+              ...(externalSessionId ? { sessionId: externalSessionId } : {}),
+            }),
+          );
+
+          return {
+            success: true,
+            externalSessionId,
+            stdoutSummary: summary,
+            result: {
+              [ENGINE_JOB_AWAITING_EXTERNAL_SYNC_KEY]: true,
+              branchLabel: "running",
+              externalSessionId,
+              sessions: spawnResult.records,
+              untrusted: true,
+              pollStartedAt: new Date().toISOString(),
+            },
+            logs,
+          };
+        }
+
         const pollTimeoutMs = context.config.timeoutMs ?? DEFAULT_AO_POLL_TIMEOUT_MS;
         const pollResult = await pollAoSessionsUntilTerminal({
           records: spawnResult.records,
@@ -522,7 +554,7 @@ export const createAgentOrchestratorBackendAdapter = (
           (status) => status === "failed" || status === "cancelled",
         );
 
-        const primarySession = pollResult.records[0];
+        const polledPrimarySession = pollResult.records[0];
         const aggregateStatus: BackendPollResult["status"] = pollResult.timedOut
           ? "failed"
           : allCompleted
@@ -536,18 +568,18 @@ export const createAgentOrchestratorBackendAdapter = (
           : summarizeSessionRecords(pollResult.records);
 
         const branchLabel = mapPollStatusToBranchLabel(aggregateStatus);
-        const externalSessionId = primarySession?.sessionId;
+        const polledExternalSessionId = polledPrimarySession?.sessionId;
 
         if (pollResult.timedOut) {
           return {
             success: false,
             error: summary,
             errorCode: "ao_poll_timeout",
-            externalSessionId,
+            externalSessionId: polledExternalSessionId,
             stdoutSummary: summary,
             result: {
               branchLabel: "blocked",
-              externalSessionId,
+              externalSessionId: polledExternalSessionId,
               sessions: pollResult.records,
               pollTimedOut: true,
               untrusted: true,
@@ -561,11 +593,11 @@ export const createAgentOrchestratorBackendAdapter = (
             success: false,
             error: summary,
             errorCode: "ao_session_failed",
-            externalSessionId,
+            externalSessionId: polledExternalSessionId,
             stdoutSummary: summary,
             result: {
               branchLabel,
-              externalSessionId,
+              externalSessionId: polledExternalSessionId,
               sessions: pollResult.records,
               untrusted: true,
               ...(pollResult.records.find((record) => record.prUrl)?.prUrl
@@ -580,11 +612,11 @@ export const createAgentOrchestratorBackendAdapter = (
 
         return {
           success: true,
-          externalSessionId,
+          externalSessionId: polledExternalSessionId,
           stdoutSummary: summary,
           result: {
             branchLabel,
-            externalSessionId,
+            externalSessionId: polledExternalSessionId,
             sessions: pollResult.records,
             untrusted: true,
             ...(pollResult.records.find((record) => record.prUrl)?.prUrl

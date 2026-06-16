@@ -20,7 +20,13 @@ import {
   type TaskRunJobPayload,
 } from "@/lib/engine/loop-engine-types";
 import type { Feature, Project, WorkflowNode } from "@/lib/loopboard";
-import { redactSensitiveText } from "@/lib/security/safe-context";
+import {
+  ENGINE_JOB_AWAITING_EXTERNAL_SYNC_KEY,
+} from "@/lib/engine/engine-sync-service";
+import {
+  formatExternalUntrustedValue,
+  redactSensitiveText,
+} from "@/lib/security/safe-context";
 
 export type TaskRunExecutorDeps = {
   repository: LoopBoardRepository;
@@ -378,6 +384,37 @@ export const executeTaskRunJob = async (
 
   const willRetry =
     !executorResult.success && context.job.attempt < context.job.maxAttempts;
+
+  if (
+    executorResult.success &&
+    executorResult.result?.[ENGINE_JOB_AWAITING_EXTERNAL_SYNC_KEY] === true
+  ) {
+    repository.appendTaskEvent(taskId, {
+      type: "ENGINE_EXTERNAL_SYNC",
+      actor: "system",
+      message: formatExternalUntrustedValue(
+        executorResult.stdoutSummary ??
+          "External backend session started; awaiting completion sync.",
+      ),
+      metadata: {
+        jobId: context.job.id,
+        backend: context.job.backend,
+        ...(typeof executorResult.result.externalSessionId === "string"
+          ? { externalSessionId: executorResult.result.externalSessionId }
+          : {}),
+        untrusted: true,
+      },
+    });
+    refreshTaskContextArtifacts(repository, contextService, taskId, "handoff-and-events");
+    logs.push(
+      logEntry("info", "Task-run awaiting external backend sync.", { taskId }),
+    );
+
+    return {
+      ...executorResult,
+      logs,
+    };
+  }
 
   if (executorResult.success) {
     finalizeTaskRunSuccess(repository, contextService, taskId, context.job, executorResult);

@@ -3,6 +3,11 @@ import {
   type LoopBoardRepository,
 } from "@/lib/db/loopboard-repository";
 import {
+  ENGINE_JOB_AWAITING_EXTERNAL_SYNC_KEY,
+  syncInFlightEngineJobs,
+  type EngineSyncResult,
+} from "@/lib/engine/engine-sync-service";
+import {
   createExecutorRegistryForRepository,
   resolveExecutorConfigForJob,
   type ExecutorRegistry,
@@ -58,6 +63,7 @@ export type TickResult = {
     skipped: number;
     deduped: number;
   };
+  engineSync?: EngineSyncResult;
 };
 
 export class LoopSchedulerError extends Error {
@@ -238,6 +244,29 @@ export const processEngineJob = (input: {
   ];
 
   if (executorResult.success) {
+    if (executorResult.result?.[ENGINE_JOB_AWAITING_EXTERNAL_SYNC_KEY] === true) {
+      executionLogs.push(
+        engineLogEntry(
+          "info",
+          "Engine job handed off to external backend; awaiting sync poll.",
+          {
+            jobId: job.id,
+            backend: job.backend,
+          },
+          now,
+        ),
+      );
+
+      return {
+        status: "running",
+        attempt: job.attempt,
+        result: executorResult.result,
+        executionLogs,
+        startedAt,
+        completedAt: undefined,
+      };
+    }
+
     executionLogs.push(
       engineLogEntry("info", "Engine job completed successfully.", {
         jobId: job.id,
@@ -368,6 +397,10 @@ export class LoopScheduler {
     const automationSettings = this.repository.getAutomationSettings();
     const policy = evaluateGlobalAutomationPolicy(automationSettings);
 
+    const engineSync = await syncInFlightEngineJobs({
+      repository: this.repository,
+    });
+
     let taskLoopPickup: TickResult["taskLoopPickup"];
     const pickupPlan = planTaskLoopPickup({
       tickMode: mode,
@@ -407,7 +440,7 @@ export class LoopScheduler {
         lastError: plan.action === "skip" ? plan.reason : null,
       });
 
-      return { plan, schedulerStatus: updated, taskLoopPickup };
+      return { plan, schedulerStatus: updated, taskLoopPickup, engineSync };
     }
 
     const running = this.repository.updateEngineJob(plan.jobId, {
@@ -485,6 +518,7 @@ export class LoopScheduler {
       job,
       schedulerStatus: schedulerStatusAfterTick,
       taskLoopPickup,
+      engineSync,
     };
   }
 }

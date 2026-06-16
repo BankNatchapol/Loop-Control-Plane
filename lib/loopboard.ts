@@ -110,6 +110,7 @@ export type TaskEventType =
   | "WORKFLOW_STEP_COMPLETED"
   | "ENGINE_PICKUP"
   | "ENGINE_PICKUP_SKIPPED"
+  | "ENGINE_EXTERNAL_SYNC"
   | "ENGINE_TASK_COMPLETED"
   | "ENGINE_TASK_FAILED";
 
@@ -1720,6 +1721,7 @@ const isEventType = (value: unknown): value is TaskEventType =>
   value === "WORKFLOW_STEP_COMPLETED" ||
   value === "ENGINE_PICKUP" ||
   value === "ENGINE_PICKUP_SKIPPED" ||
+  value === "ENGINE_EXTERNAL_SYNC" ||
   value === "ENGINE_TASK_COMPLETED" ||
   value === "ENGINE_TASK_FAILED";
 
