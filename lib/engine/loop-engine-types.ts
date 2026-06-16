@@ -44,6 +44,19 @@ export type EngineRunLogEntry = {
   metadata?: Record<string, unknown>;
 };
 
+export type TaskRunAction = "execute" | "review" | "handoff";
+
+export type TaskRunTrigger = "scheduler" | "manual" | "workflow";
+
+export type TaskRunJobPayload = {
+  taskId: string;
+  projectId: string;
+  action: TaskRunAction;
+  executorConfig: ExecutorConfig;
+  contextPaths?: string[];
+  trigger: TaskRunTrigger;
+};
+
 export type EngineJob = {
   id: string;
   kind: EngineJobKind;
@@ -317,4 +330,137 @@ export const resolveExecutorTarget = (
   }
 
   return { ok: true, backend, jobKind };
+};
+
+export const TASK_RUN_ACTIONS: readonly TaskRunAction[] = [
+  "execute",
+  "review",
+  "handoff",
+] as const;
+
+export const TASK_RUN_TRIGGERS: readonly TaskRunTrigger[] = [
+  "scheduler",
+  "manual",
+  "workflow",
+] as const;
+
+export const isTaskRunAction = (value: unknown): value is TaskRunAction =>
+  typeof value === "string" &&
+  (TASK_RUN_ACTIONS as readonly string[]).includes(value);
+
+export const isTaskRunTrigger = (value: unknown): value is TaskRunTrigger =>
+  typeof value === "string" &&
+  (TASK_RUN_TRIGGERS as readonly string[]).includes(value);
+
+export type TaskRunPayloadValidationResult =
+  | { ok: true; payload: TaskRunJobPayload }
+  | { ok: false; code: string; message: string; issues: ExecutorConfigValidationIssue[] };
+
+export const buildTaskRunJobPayload = (
+  input: TaskRunJobPayload,
+): Record<string, unknown> => ({
+  taskId: input.taskId,
+  projectId: input.projectId,
+  action: input.action,
+  executorConfig: input.executorConfig,
+  ...(input.contextPaths ? { contextPaths: input.contextPaths } : {}),
+  trigger: input.trigger,
+});
+
+export const validateTaskRunJobPayload = (
+  value: unknown,
+): TaskRunPayloadValidationResult => {
+  if (!isRecord(value)) {
+    return {
+      ok: false,
+      code: "task_run_payload_invalid",
+      message: "Task-run payload must be an object.",
+      issues: [{ field: "payload", message: "Expected a JSON object." }],
+    };
+  }
+
+  const issues: ExecutorConfigValidationIssue[] = [];
+
+  if (typeof value.taskId !== "string" || value.taskId.trim().length === 0) {
+    issues.push({ field: "taskId", message: "Task id is required." });
+  }
+
+  if (typeof value.projectId !== "string" || value.projectId.trim().length === 0) {
+    issues.push({ field: "projectId", message: "Project id is required." });
+  }
+
+  if (!isTaskRunAction(value.action)) {
+    issues.push({
+      field: "action",
+      message: `Action must be one of: ${TASK_RUN_ACTIONS.join(", ")}.`,
+    });
+  }
+
+  if (!isTaskRunTrigger(value.trigger)) {
+    issues.push({
+      field: "trigger",
+      message: `Trigger must be one of: ${TASK_RUN_TRIGGERS.join(", ")}.`,
+    });
+  }
+
+  const executorValidation = validateExecutorConfig(value.executorConfig);
+  if (!executorValidation.ok) {
+    issues.push(...executorValidation.issues.map((issue) => ({
+      field: `executorConfig.${issue.field}`,
+      message: issue.message,
+    })));
+  }
+
+  if (value.contextPaths !== undefined) {
+    if (
+      !Array.isArray(value.contextPaths) ||
+      !value.contextPaths.every((entry) => typeof entry === "string")
+    ) {
+      issues.push({
+        field: "contextPaths",
+        message: "Context paths must be an array of strings.",
+      });
+    }
+  }
+
+  if (issues.length > 0) {
+    return {
+      ok: false,
+      code: "task_run_payload_invalid",
+      message: "Task-run payload failed validation.",
+      issues,
+    };
+  }
+
+  if (!executorValidation.ok) {
+    return {
+      ok: false,
+      code: "task_run_payload_invalid",
+      message: "Task-run payload failed validation.",
+      issues,
+    };
+  }
+
+  const contextPaths = Array.isArray(value.contextPaths)
+    ? value.contextPaths.filter((entry): entry is string => typeof entry === "string")
+    : undefined;
+
+  return {
+    ok: true,
+    payload: {
+      taskId: value.taskId as string,
+      projectId: value.projectId as string,
+      action: value.action as TaskRunAction,
+      executorConfig: executorValidation.config,
+      ...(contextPaths && contextPaths.length > 0 ? { contextPaths } : {}),
+      trigger: value.trigger as TaskRunTrigger,
+    },
+  };
+};
+
+export const parseTaskRunJobPayload = (
+  payload: Record<string, unknown>,
+): TaskRunJobPayload | undefined => {
+  const validation = validateTaskRunJobPayload(payload);
+  return validation.ok ? validation.payload : undefined;
 };

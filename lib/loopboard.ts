@@ -107,7 +107,8 @@ export type TaskEventType =
   | "DONE"
   | "AO_READY_APPROVED"
   | "HANDOFF_READY"
-  | "WORKFLOW_STEP_COMPLETED";
+  | "WORKFLOW_STEP_COMPLETED"
+  | "ENGINE_PICKUP_SKIPPED";
 
 export type TaskAction =
   | "assign-ai"
@@ -1690,7 +1691,9 @@ const isEventType = (value: unknown): value is TaskEventType =>
   value === "REVIEW_APPROVED" ||
   value === "DONE" ||
   value === "AO_READY_APPROVED" ||
-  value === "HANDOFF_READY";
+  value === "HANDOFF_READY" ||
+  value === "WORKFLOW_STEP_COMPLETED" ||
+  value === "ENGINE_PICKUP_SKIPPED";
 
 const sanitizeMetadata = (
   value: unknown,

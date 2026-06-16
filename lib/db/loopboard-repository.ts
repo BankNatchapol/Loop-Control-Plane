@@ -334,6 +334,8 @@ export interface UpdateEngineJobInput {
 
 export interface ListEngineJobsOptions {
   projectId?: string;
+  taskId?: string;
+  kind?: EngineJobKind;
   status?: EngineJobStatus | EngineJobStatus[];
   limit?: number;
 }
@@ -344,6 +346,19 @@ export interface UpdateEngineSchedulerInput {
   tickCount?: number;
   lastError?: string | null;
   updatedAt?: string;
+}
+
+export interface EnqueueTaskRunJobInput {
+  taskId: string;
+  projectId: string;
+  backend: ExecutorBackend;
+  payload: Record<string, unknown>;
+  maxAttempts?: number;
+}
+
+export interface EnqueueTaskRunJobResult {
+  job: EngineJob;
+  created: boolean;
 }
 
 type ProjectRow = {
@@ -617,6 +632,7 @@ const eventTypes = new Set<TaskEventType>([
   "AO_READY_APPROVED",
   "HANDOFF_READY",
   "WORKFLOW_STEP_COMPLETED",
+  "ENGINE_PICKUP_SKIPPED",
 ]);
 const featureEventTypes = new Set<FeatureEventType>([
   "SPEC_APPROVED",
@@ -2709,6 +2725,16 @@ export class LoopBoardRepository {
       params.push(assertNonEmptyString(options.projectId, "projectId"));
     }
 
+    if (options.taskId) {
+      clauses.push("task_id = ?");
+      params.push(assertNonEmptyString(options.taskId, "taskId"));
+    }
+
+    if (options.kind) {
+      clauses.push("kind = ?");
+      params.push(assertEngineJobKind(options.kind));
+    }
+
     if (options.status !== undefined) {
       const statuses = Array.isArray(options.status) ? options.status : [options.status];
       if (statuses.length === 0) {
@@ -2880,6 +2906,48 @@ export class LoopBoardRepository {
       .get() as EngineJobRow | undefined;
 
     return row ? engineJobFromRow(row) : undefined;
+  }
+
+  getActiveTaskRunJobForTask(taskId: string): EngineJob | undefined {
+    const row = this.database
+      .prepare(
+        `
+          SELECT * FROM engine_jobs
+          WHERE task_id = ? AND kind = 'task-run' AND status IN ('queued', 'running')
+          ORDER BY queued_at DESC, created_at DESC
+          LIMIT 1
+        `,
+      )
+      .get(assertNonEmptyString(taskId, "taskId")) as EngineJobRow | undefined;
+
+    return row ? engineJobFromRow(row) : undefined;
+  }
+
+  hasActiveTaskRunJob(taskId: string): boolean {
+    return this.getActiveTaskRunJobForTask(taskId) !== undefined;
+  }
+
+  enqueueTaskRunJob(input: EnqueueTaskRunJobInput): EnqueueTaskRunJobResult {
+    const taskId = assertNonEmptyString(input.taskId, "taskId");
+    const projectId = assertNonEmptyString(input.projectId, "projectId");
+    const backend = assertExecutorBackend(input.backend);
+    const payload = assertRecord(input.payload, "payload");
+
+    const existing = this.getActiveTaskRunJobForTask(taskId);
+    if (existing) {
+      return { job: existing, created: false };
+    }
+
+    const job = this.createEngineJob({
+      kind: "task-run",
+      backend,
+      projectId,
+      taskId,
+      payload,
+      maxAttempts: input.maxAttempts,
+    });
+
+    return { job, created: true };
   }
 
   getEngineSchedulerStatus(): EngineSchedulerStatus {
