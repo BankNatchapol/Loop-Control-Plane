@@ -190,20 +190,35 @@ describe("Automation policy", () => {
   });
 
   it("uses project settings for low-risk automated task execution", () => {
-    const projectPolicy = {
+    const blockedPolicy = {
       ...defaultProjectAutomationPolicy,
       allowLowRiskAutoTaskExecution: false,
     };
-    const policy = evaluateTaskPolicy({
+    const blocked = evaluateTaskPolicy({
       operation: "assign-ai",
       task: taskWith({ risk: "low" }),
       automated: true,
       automationSettings: autoRunEnabled,
-      projectPolicy,
+      projectPolicy: blockedPolicy,
     });
 
-    assert.equal(policy.kind, "deny");
-    assert.equal(policy.code, "project_blocks_low_risk_auto_task_execution");
+    assert.equal(blocked.kind, "deny");
+    assert.equal(blocked.code, "project_blocks_low_risk_auto_task_execution");
+
+    const allowedPolicy = {
+      ...defaultProjectAutomationPolicy,
+      allowLowRiskAutoTaskExecution: true,
+    };
+    const allowed = evaluateTaskPolicy({
+      operation: "assign-ai",
+      task: taskWith({ risk: "low" }),
+      automated: true,
+      automationSettings: autoRunEnabled,
+      projectPolicy: allowedPolicy,
+    });
+
+    assert.equal(allowed.kind, "allow");
+    assert.equal(allowed.code, "task_policy_allowed");
   });
 
   it("uses project settings for low-risk issue and AO-ready automation", () => {

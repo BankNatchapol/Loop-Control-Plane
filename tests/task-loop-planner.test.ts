@@ -190,6 +190,112 @@ describe("task loop planner", () => {
     });
   });
 
+  it("blocks high-risk automated pickup even when low-risk auto execution is enabled", () => {
+    withRepository((repository) => {
+      repository.updateAutomationSettings({ globalAutoRunEnabled: true });
+      repository.updateProject(seedProject.id, {
+        automationPolicy: {
+          ...seedProject.automationPolicy,
+          allowLowRiskAutoTaskExecution: true,
+        },
+      });
+      repository.updateTask("task-local-persistence-reset", { risk: "high" });
+
+      const scan = scanTaskLoopCandidates(repository, {
+        projectId: seedProject.id,
+        taskId: "task-local-persistence-reset",
+        automated: true,
+      });
+
+      assert.equal(scan.eligible.length, 0);
+      assert.equal(scan.skipped[0]?.code, "high_risk_manual_only");
+    });
+  });
+
+  it("requires ao-ready approval for medium-risk automated pickup", () => {
+    withRepository((repository) => {
+      repository.updateAutomationSettings({ globalAutoRunEnabled: true });
+      repository.updateProject(seedProject.id, {
+        automationPolicy: {
+          ...seedProject.automationPolicy,
+          allowLowRiskAutoTaskExecution: true,
+        },
+      });
+      repository.updateTask("task-local-persistence-reset", {
+        risk: "medium",
+        github: {
+          issueNumber: 36,
+          issueUrl: "https://github.com/bank-p/loop-control-plane/issues/36",
+          issueState: "open",
+          ciStatus: "not-started",
+          reviewStatus: "not-requested",
+        },
+      });
+
+      const blocked = scanTaskLoopCandidates(repository, {
+        projectId: seedProject.id,
+        taskId: "task-local-persistence-reset",
+        automated: true,
+      });
+
+      assert.equal(blocked.eligible.length, 0);
+      assert.equal(blocked.skipped[0]?.code, "medium_risk_review_gate");
+
+      repository.updateTask("task-local-persistence-reset", {
+        github: {
+          issueNumber: 36,
+          issueUrl: "https://github.com/bank-p/loop-control-plane/issues/36",
+          issueState: "open",
+          ciStatus: "not-started",
+          reviewStatus: "not-requested",
+          aoReadyApprovedAt: "2026-06-14T00:00:00.000Z",
+        },
+      });
+
+      const approved = scanTaskLoopCandidates(repository, {
+        projectId: seedProject.id,
+        taskId: "task-local-persistence-reset",
+        automated: true,
+      });
+
+      assert.equal(approved.eligible.length, 1);
+      assert.equal(approved.skipped.length, 0);
+    });
+  });
+
+  it("dry-run enqueue does not persist jobs while scan reports eligible tasks", () => {
+    withRepository((repository) => {
+      repository.updateAutomationSettings({ globalAutoRunEnabled: true });
+      repository.updateProject(seedProject.id, {
+        automationPolicy: {
+          ...seedProject.automationPolicy,
+          allowLowRiskAutoTaskExecution: true,
+        },
+      });
+
+      const scan = scanTaskLoopCandidates(repository, {
+        projectId: seedProject.id,
+        taskId: "task-local-persistence-reset",
+        automated: true,
+      });
+      assert.equal(scan.eligible.length, 1);
+      assert.equal(scan.eligible[0]?.taskId, "task-local-persistence-reset");
+
+      const result = enqueueTaskLoopJobs(repository, {
+        projectId: seedProject.id,
+        taskId: "task-local-persistence-reset",
+        trigger: "scheduler",
+        automated: true,
+        dryRun: true,
+      });
+
+      assert.equal(result.enqueued.length, 0);
+      assert.equal(result.skipped.length, 0);
+      assert.equal(repository.hasActiveTaskRunJob("task-local-persistence-reset"), false);
+      assert.equal(repository.countActiveTaskRunJobs(), 0);
+    });
+  });
+
   it("repository active task-run lookup finds queued jobs only", () => {
     withRepository((repository) => {
       assert.equal(repository.hasActiveTaskRunJob("task-local-persistence-reset"), false);

@@ -184,6 +184,9 @@ describe("task-run executor orchestration", () => {
         ),
       );
       assert.ok(
+        task.events.some((event) => event.type === "ASSIGNED_TO_AI"),
+      );
+      assert.ok(
         task.events.some((event) => event.type === "ENGINE_TASK_COMPLETED"),
       );
 
