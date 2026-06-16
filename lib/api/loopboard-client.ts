@@ -32,6 +32,12 @@ import type {
   WorkflowFileImportResult,
   WorkflowFileValidationError,
 } from "@/lib/workflows/workflow-files";
+import type {
+  EngineDemoJobResponse,
+  EngineSchedulerActionResponse,
+  EngineStatusResponse,
+  EngineTickResponse,
+} from "@/lib/api/engine-actions";
 import type { AutomationSettings } from "@/lib/policies/automation-policy";
 import type { WorkflowRunAction } from "@/lib/workflows/workflow-runner";
 
@@ -360,6 +366,33 @@ export const fetchAutomationSettings = async (): Promise<AutomationSettings> => 
 
   return readApiResponse<AutomationSettings>(response);
 };
+
+export const fetchEngineStatus = async (
+  projectId?: string,
+): Promise<EngineStatusResponse> => {
+  const params = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+  const response = await fetch(`/api/engine/status${params}`, { cache: "no-store" });
+
+  return readApiResponse<EngineStatusResponse>(response);
+};
+
+export const startEngineScheduler = async (): Promise<EngineSchedulerActionResponse> =>
+  writeJson<EngineSchedulerActionResponse>("/api/engine/start", {});
+
+export const stopEngineScheduler = async (): Promise<EngineSchedulerActionResponse> =>
+  writeJson<EngineSchedulerActionResponse>("/api/engine/stop", {});
+
+export const tickEngine = async ({
+  mode = "manual",
+}: {
+  mode?: "manual" | "automated";
+} = {}): Promise<EngineTickResponse> =>
+  writeJson<EngineTickResponse>("/api/engine/tick", { mode });
+
+export const enqueueEngineDemoJob = async (
+  projectId: string,
+): Promise<EngineDemoJobResponse> =>
+  writeJson<EngineDemoJobResponse>("/api/engine/demo-job", { projectId });
 
 export const updateAutomationSettings = async (
   input: Partial<AutomationSettings>,

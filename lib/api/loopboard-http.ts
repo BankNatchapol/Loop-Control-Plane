@@ -9,6 +9,7 @@ import { TaskContextActionError } from "@/lib/api/task-context-actions";
 import { FeatureArtifactDocumentError } from "@/lib/features/feature-artifact-documents";
 import { ProjectOpenActionError } from "@/lib/projects/project-open-actions";
 import { TaskOpenActionError } from "@/lib/tasks/task-open-actions";
+import { LoopSchedulerError } from "@/lib/engine/loop-scheduler";
 import { WorkflowFileError } from "@/lib/workflows/workflow-files";
 
 export type ApiSuccess<T> = {
@@ -67,6 +68,10 @@ export const handleApiError = (error: unknown) => {
       },
       { status: error.statusCode },
     );
+  }
+
+  if (error instanceof LoopSchedulerError) {
+    return jsonError(error.message, error.statusCode, error.code);
   }
 
   console.error(error);
