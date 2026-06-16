@@ -12,6 +12,7 @@
     "lint": "eslint .",
     "test": "node --test --import tsx tests/*.test.ts",
     "test:ui": "playwright test",
+    "screenshots:readme": "CAPTURE_SCREENSHOTS=1 playwright test readme-screenshots",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
