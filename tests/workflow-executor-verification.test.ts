@@ -17,7 +17,10 @@ import {
   ExecutorRegistry,
   StubExecutor,
   type ExecutorContext,
+  type ExecutorResult,
 } from "@/lib/engine/executor-registry";
+import { executeCreateGitHubIssues } from "@/lib/engine/executors/create-github-issues-executor";
+import { executeOpenPr } from "@/lib/engine/executors/open-pr-executor";
 import { dispatchWorkflowStepJob } from "@/lib/engine/executors/workflow-step-dispatcher";
 import { parseWorkflowStepJobPayload } from "@/lib/engine/executors/workflow-step-types";
 import { LoopScheduler } from "@/lib/engine/loop-scheduler";
@@ -68,22 +71,137 @@ const createMockSpecKitProcessRunner = (repoPath: string): ProcessRunner => ({
   },
 } as unknown as ProcessRunner);
 
+const createMockTestProcessRunner = (): ProcessRunner =>
+  ({
+    run: async (): Promise<ProcessRunResult> => ({
+      success: true,
+      exitCode: 0,
+      stdout: "All tests passed",
+      stderr: "",
+      stdoutSummary: "All tests passed",
+      stderrSummary: "",
+      timedOut: false,
+      durationMs: 12,
+      commandSummary: "npm test",
+      profile: "npm-test",
+      command: "npm",
+      args: ["test"],
+    }),
+  }) as unknown as ProcessRunner;
+
+const createMockGhProcessRunner = (): ProcessRunner =>
+  ({
+    run: async (): Promise<ProcessRunResult> => ({
+      success: true,
+      exitCode: 0,
+      stdout: "https://github.com/bank-p/loop-control-plane/pull/42",
+      stderr: "",
+      stdoutSummary: "https://github.com/bank-p/loop-control-plane/pull/42",
+      stderrSummary: "",
+      timedOut: false,
+      durationMs: 8,
+      commandSummary: "gh pr create",
+      profile: "gh",
+      command: "gh",
+      args: ["pr", "create"],
+    }),
+  }) as unknown as ProcessRunner;
+
+const toExecutorResult = (
+  stepResult: Awaited<
+    ReturnType<
+      | typeof executeCreateGitHubIssues
+      | typeof executeOpenPr
+      | typeof dispatchWorkflowStepJob
+    >
+  >,
+): ExecutorResult => ({
+  success: stepResult.success,
+  error: stepResult.error,
+  result: {
+    ...("result" in stepResult && stepResult.result ? stepResult.result : {}),
+    errorCode: "errorCode" in stepResult ? stepResult.errorCode : undefined,
+    branchLabel: "branchLabel" in stepResult ? stepResult.branchLabel : undefined,
+    outputArtifacts:
+      "outputArtifacts" in stepResult ? stepResult.outputArtifacts : undefined,
+  },
+  logs: stepResult.logs,
+});
+
 const createVerificationExecutorRegistry = (
   repository: LoopBoardRepository,
   repoPath: string,
 ): ExecutorRegistry =>
   new ExecutorRegistry([
     new StubExecutor({
-      workflowStepHandler: async (context: ExecutorContext) =>
-        dispatchWorkflowStepJob(context, {
+      workflowStepHandler: async (context: ExecutorContext) => {
+        const payload = parseWorkflowStepJobPayload(context.job.payload);
+        const featureId =
+          payload?.featureId ??
+          (typeof context.job.payload.featureId === "string"
+            ? context.job.payload.featureId
+            : undefined);
+
+        if (payload?.nodeType === "create-github-issues" && featureId) {
+          const stepResult = await executeCreateGitHubIssues({
+            repository,
+            featureId,
+            workflowRunId: payload.workflowRunId,
+            outputArtifacts: payload.outputArtifacts,
+            token: "verification-test-token",
+            automationSettings: {
+              ...repository.getAutomationSettings(),
+              globalAutoRunEnabled: true,
+            },
+            createIssue: async ({ title }) => ({
+              status: "created",
+              repository: "bank-p/loop-control-plane",
+              message: `Created GitHub issue for ${title}.`,
+              issueNumber: 101,
+              issueUrl: "https://github.com/bank-p/loop-control-plane/issues/101",
+              labels: ["loopboard", "risk-low"],
+              createdAt: "2026-06-16T12:00:00.000Z",
+            }),
+          });
+
+          return toExecutorResult(stepResult);
+        }
+
+        if (payload?.nodeType === "open-pr" && featureId) {
+          const stepResult = await executeOpenPr({
+            repository,
+            featureId,
+            workflowRunId: payload.workflowRunId,
+            inputArtifacts: payload.inputArtifacts,
+            outputArtifacts: payload.outputArtifacts,
+            projectRepoPath: repoPath,
+            useGhCreateFallback: true,
+            processRunner: createMockGhProcessRunner(),
+            syncPullRequest: async () => ({
+              status: "not-found",
+              repository: "bank-p/loop-control-plane",
+              message: "No pull request found for mocked verification walkthrough.",
+              syncedAt: "2026-06-16T12:00:00.000Z",
+              linkedIssueNumbers: [],
+            }),
+          });
+
+          return toExecutorResult(stepResult);
+        }
+
+        return dispatchWorkflowStepJob(context, {
           repository,
-          processRunner: createMockSpecKitProcessRunner(repoPath),
-        }),
+          processRunner:
+            payload?.nodeType === "run-tests"
+              ? createMockTestProcessRunner()
+              : createMockSpecKitProcessRunner(repoPath),
+        });
+      },
     }),
   ]);
 
 describe("workflow executor verification", () => {
-  it("walks Feature Development Loop through import-tasks with fixture brief and mocked Spec Kit CLI", async () => {
+  it("walks Feature Development Loop through open-pr with fixture brief and mocked externals", async () => {
     const tempDirectory = mkdtempSync(join(tmpdir(), "loopboard-fdl-verify-"));
     const repoPath = join(tempDirectory, "repo");
     const featureId = "feature-fdl-verify";
@@ -98,7 +216,13 @@ describe("workflow executor verification", () => {
       seedDatabase(database);
 
       const repository = new LoopBoardRepository(database);
-      repository.updateProject(seedProject.id, { repoPath });
+      repository.updateProject(seedProject.id, {
+        repoPath,
+        automationPolicy: {
+          ...seedProject.automationPolicy,
+          allowLowRiskAutoIssueCreation: true,
+        },
+      });
       repository.updateAutomationSettings({ globalAutoRunEnabled: true });
 
       const discovered = discoverFeatureArtifacts({
@@ -207,6 +331,90 @@ describe("workflow executor verification", () => {
       assert.ok(
         featureEvents.filter((event) => event.type === "WORKFLOW_STEP_COMPLETED").length >=
           3,
+      );
+
+      const githubPaused = runNextWorkflowStep({ repository, runId: run.id });
+      assert.equal(githubPaused.status, "paused");
+      assert.equal(githubPaused.currentNodeId, "node-create-github-issues");
+
+      const githubDelegated = approveWorkflowRunStep({ repository, runId: run.id });
+      assert.equal(githubDelegated.steps.at(-1)?.status, "running");
+
+      const githubTick = await scheduler.tick({ mode: "manual" });
+      assert.equal(githubTick.job?.status, "completed");
+      assert.equal(githubTick.job?.payload.nodeType, "create-github-issues");
+
+      const afterGitHub = repository.getWorkflowRun(run.id);
+      assert.equal(afterGitHub.currentNodeId, "node-agent-orchestrator-implement");
+      assert.ok(
+        boardTasks.every((task) =>
+          repository
+            .listBoardData(seedProject.id)
+            .tasks.find((candidate) => candidate.id === task.id)?.github.issueNumber ===
+            101,
+        ),
+      );
+
+      const aoPaused = runNextWorkflowStep({ repository, runId: run.id });
+      assert.equal(aoPaused.status, "paused");
+      assert.equal(aoPaused.currentNodeId, "node-agent-orchestrator-implement");
+
+      const afterAo = approveWorkflowRunStep({ repository, runId: run.id });
+      assert.equal(afterAo.currentNodeId, "node-run-tests");
+      assert.equal(afterAo.steps.at(-1)?.status, "completed");
+
+      const testsPaused = runNextWorkflowStep({ repository, runId: run.id });
+      assert.equal(testsPaused.status, "paused");
+      assert.equal(testsPaused.currentNodeId, "node-run-tests");
+
+      const testsDelegated = approveWorkflowRunStep({ repository, runId: run.id });
+      assert.equal(testsDelegated.steps.at(-1)?.status, "running");
+
+      const testsTick = await scheduler.tick({ mode: "manual" });
+      assert.equal(testsTick.job?.status, "completed");
+      assert.equal(testsTick.job?.payload.nodeType, "run-tests");
+
+      const afterTests = repository.getWorkflowRun(run.id);
+      assert.equal(afterTests.currentNodeId, "node-ai-review");
+
+      const reviewEnginePaused = runNextWorkflowStep({ repository, runId: run.id });
+      assert.equal(reviewEnginePaused.status, "paused");
+      assert.equal(reviewEnginePaused.currentNodeId, "node-ai-review");
+
+      const reviewEngineDelegated = approveWorkflowRunStep({ repository, runId: run.id });
+      assert.equal(reviewEngineDelegated.steps.at(-1)?.status, "running");
+
+      const aiReviewTick = await scheduler.tick({ mode: "manual" });
+      assert.equal(aiReviewTick.job?.status, "completed");
+      assert.equal(aiReviewTick.job?.payload.nodeType, "ai-review");
+
+      const afterAiReview = repository.getWorkflowRun(run.id);
+      assert.equal(afterAiReview.currentNodeId, "node-open-pr");
+
+      const openPrPaused = runNextWorkflowStep({ repository, runId: run.id });
+      assert.equal(openPrPaused.status, "paused");
+      assert.equal(openPrPaused.currentNodeId, "node-open-pr");
+
+      const openPrDelegated = approveWorkflowRunStep({ repository, runId: run.id });
+      assert.equal(openPrDelegated.steps.at(-1)?.status, "running");
+
+      const openPrTick = await scheduler.tick({ mode: "manual" });
+      assert.equal(openPrTick.job?.status, "completed");
+      assert.equal(openPrTick.job?.payload.nodeType, "open-pr");
+
+      const afterOpenPr = repository.getWorkflowRun(run.id);
+      assert.equal(afterOpenPr.currentNodeId, "node-merge");
+      assert.equal(afterOpenPr.steps.at(-1)?.status, "completed");
+
+      const mergePaused = runNextWorkflowStep({ repository, runId: run.id });
+      assert.equal(mergePaused.status, "paused");
+      assert.equal(mergePaused.currentNodeId, "node-merge");
+      assert.equal(mergePaused.steps.at(-1)?.status, "waiting-approval");
+
+      const completedEvents = repository.getFeature(featureId).events;
+      assert.ok(
+        completedEvents.filter((event) => event.type === "WORKFLOW_STEP_COMPLETED").length >=
+          8,
       );
     } finally {
       database.close();

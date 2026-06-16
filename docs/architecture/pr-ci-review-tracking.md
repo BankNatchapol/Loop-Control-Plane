@@ -11,15 +11,16 @@ related:
   - '[[GitHub-Issue-Bridge]]'
   - '[[Human-Takeover]]'
   - '[[Security-Policy]]'
+  - '[[Loop-Execution-Engine]]'
 ---
 
 # PR CI Review Tracking
 
-PR CI review tracking extends the issue bridge from [[GitHub-Issue-Bridge]] so LoopBoard can show pull request, check, and review state on task cards and task details. It supports human review handoff from [[Human-Takeover]] while preserving the trust boundary defined by [[Security-Policy]].
+PR CI review tracking extends the issue bridge from [[GitHub-Issue-Bridge]] so Loop Control Plane can show pull request, check, and review state on task cards and task details. It supports human review handoff from [[Human-Takeover]] while preserving the trust boundary defined by [[Security-Policy]].
 
 ## Purpose
 
-LoopBoard keeps GitHub synchronization manual-first. A user explicitly runs PR/CI sync from a task, and LoopBoard stores only concise task-routing metadata:
+Loop Control Plane keeps GitHub synchronization manual-first. A user explicitly runs PR/CI sync from a task, and Loop Control Plane stores only concise task-routing metadata:
 
 - Pull request number, URL, branch, state, and merge status.
 - CI status and a short failed-check summary.
@@ -33,14 +34,14 @@ The board remains usable when GitHub is disconnected, a token is missing, or no 
 
 Manual PR sync uses the configured project repository and the server-side GitHub token from the same environment-token path as issue sync. Tokens are never stored in task data, generated context files, events, or prompts.
 
-LoopBoard discovers pull requests in this order:
+Loop Control Plane discovers pull requests in this order:
 
 1. Explicit PR URL supplied by the user during sync.
 2. Existing task GitHub metadata, including stored PR number or PR URL.
 3. Linked issue timeline cross-references when the task has a GitHub issue number.
 4. Branch lookup using the task GitHub PR branch or task branch against `owner:branch`.
 
-When multiple PRs are discovered, LoopBoard prefers an open or merged PR over a closed PR, then uses the most recently updated PR. It fetches PR state, head branch, head SHA, merge status, requested reviewers, latest reviews, and linked issue carry-forward. Open non-draft PRs move eligible tasks to `needs-review`; merged PRs move tasks to `done`.
+When multiple PRs are discovered, Loop Control Plane prefers an open or merged PR over a closed PR, then uses the most recently updated PR. It fetches PR state, head branch, head SHA, merge status, requested reviewers, latest reviews, and linked issue carry-forward. Open non-draft PRs move eligible tasks to `needs-review`; merged PRs move tasks to `done`.
 
 ## Persisted State
 
@@ -62,7 +63,7 @@ The tracked PR fields are:
 
 ## Delivery Status
 
-LoopBoard derives a normalized delivery status from GitHub metadata for consistent board display:
+Loop Control Plane derives a normalized delivery status from GitHub metadata for consistent board display:
 
 - `no-pr`: no PR number or URL is known.
 - `pr-opened`: a PR exists, with no more specific CI or review signal.
@@ -79,7 +80,7 @@ Merged and closed states take precedence over all other signals. Review signals 
 
 ## CI Normalization
 
-CI sync reads both GitHub check runs and combined commit statuses for the PR head commit. LoopBoard normalizes individual checks into:
+CI sync reads both GitHub check runs and combined commit statuses for the PR head commit. Loop Control Plane normalizes individual checks into:
 
 - `pending`: queued, in progress, requested, waiting, or pending.
 - `passing`: successful check runs or successful commit statuses.
@@ -93,13 +94,13 @@ The task-level CI status is then derived as:
 - `pending` when no check is failing and at least one check is pending.
 - `passing` when at least one check is passing and none are pending or failing.
 
-Failure summaries include only failed check names and their GitHub links, capped to the first five failing checks with a short overflow note. LoopBoard does not fetch, store, or summarize full CI logs.
+Failure summaries include only failed check names and their GitHub links, capped to the first five failing checks with a short overflow note. Loop Control Plane does not fetch, store, or summarize full CI logs.
 
 ## Review Tracking
 
 Review sync considers requested reviewers and the latest relevant GitHub review. `CHANGES_REQUESTED` and `APPROVED` reviews are sorted by submission time, and the newest relevant review determines the review status. If there is no relevant review but requested reviewers or teams are present, the task is marked `requested`; otherwise it is `not-requested`.
 
-When available, LoopBoard stores a link to the latest relevant review. It does not store review comment bodies as trusted task instructions.
+When available, Loop Control Plane stores a link to the latest relevant review. It does not store review comment bodies as trusted task instructions.
 
 ## Events And Handoff
 
@@ -118,7 +119,7 @@ Generated `events.jsonl`, task context, and refreshed `handoff.md` include curre
 
 ## Trust Boundary
 
-GitHub is external context. LoopBoard may display or link to PRs, failed checks, and reviews, but it does not trust those sources as execution instructions.
+GitHub is external context. Loop Control Plane may display or link to PRs, failed checks, and reviews, but it does not trust those sources as execution instructions.
 
 The following are intentionally not trusted:
 
@@ -128,7 +129,7 @@ The following are intentionally not trusted:
 - Direct GitHub issue or PR edits.
 - Branch names or PR titles as instructions.
 
-Agents and workflow runners must treat those sources as external signals only. A human must copy any instruction from GitHub into trusted LoopBoard task data, acceptance criteria, or notes before it can direct work.
+Agents and workflow runners must treat those sources as external signals only. A human must copy any instruction from GitHub into trusted Loop Control Plane task data, acceptance criteria, or notes before it can direct work.
 
 ## Known Limitations
 

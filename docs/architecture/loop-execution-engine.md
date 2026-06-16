@@ -425,7 +425,15 @@ End-to-end coverage: `tests/task-loop-integration.test.ts` seeds a low-risk Read
 | `app/api/engine/task-loop/**` | Task loop HTTP routes |
 | `tests/task-loop-*.test.ts` | Planner, executor, and integration coverage |
 | `tests/workflow-engine-integration.test.ts` | Trimmed import-tasks → create-github-issues engine path |
-| `tests/workflow-executor-verification.test.ts` | Feature Development Loop walkthrough verification |
+| `tests/workflow-executor-verification.test.ts` | Feature Development Loop full walkthrough verification |
+| `tests/loop-full-verification.test.ts` | High-risk pickup and merge hard-stop policy confirmation |
+| `tests/loop-engine-auto-advance.test.ts` | Chained auto-advance and pause semantics |
+| `tests/loop-engine-recovery.test.ts` | Operator retry, cancel, and resume flows |
+| `tests/loop-engine-observability.test.ts` | Job API filters, redaction, and metrics |
+| `lib/engine/auto-advance.ts` | Workflow auto-advance orchestration after engine jobs |
+| `lib/engine/auto-advance-ui.ts` | Client-safe pause reason extraction for dashboard panels |
+| `lib/engine/task-loop-eligibility.ts` | Client-safe structural task pickup eligibility checks |
+| `lib/engine/engine-job-recovery.ts` | Retry, cancel, and workflow resume operator actions |
 | `lib/engine/backends/backend-adapter.ts` | External adapter contract and cwd validation |
 | `lib/engine/backends/cli-backend-adapters.ts` | Cursor, Claude Code, Codex CLI adapters |
 | `lib/engine/backends/agent-orchestrator-backend.ts` | AO spawn, fan-out, poll |
@@ -444,6 +452,69 @@ End-to-end coverage: `tests/task-loop-integration.test.ts` seeds a low-risk Read
 - **No auto-merge from external backends** — AO and CLI results remain untrusted until human review; see [[Human-Takeover]] and [[Security-Policy]].
 
 Real agent CLI backends (Cursor, Claude Code, Codex, Agent Orchestrator) are implemented in Phase 04. See **Agent Backends (Phase 04)** and [[Agent-Orchestrator-Bridge]].
+
+## Auto-Advance (Phase 05)
+
+When both **global auto-run** and project **`engineSettings.autoAdvanceEnabled`** are enabled, the scheduler chains workflow progression after each successful `workflow-step` job without requiring manual **Run Next Step** clicks.
+
+```mermaid
+flowchart LR
+  JobDone["workflow-step completed"]
+  Policy["evaluateEnginePolicy auto-advance"]
+  FollowUp["maybeFollowUpAfterCompletedJob"]
+  Chain["LoopScheduler tick chain max 25"]
+  Pause["Pause reason on runner + Engine panel"]
+
+  JobDone --> FollowUp
+  FollowUp --> Policy
+  Policy -->|allow| Chain
+  Policy -->|deny| Pause
+  Chain -->|human / merge / deny / fail| Pause
+```
+
+| Gate | Behavior |
+|------|----------|
+| **Global auto-run off** | Auto-advance skipped; manual ticks and **Run Next Step (Engine)** still work |
+| **Project auto-advance off** (default) | Workflow runs pause after each engine step until operator resumes |
+| **`requires-approval` semi nodes** | Pause with policy code; operator approves then engine enqueues |
+| **`merge`, `manual-claude-code-edit`, human nodes** | Hard stop — never auto-executes even when auto-advance is on |
+| **Policy deny (high/critical risk)** | Stop with explainable pause reason |
+| **Failed step** | Run status `failed` or `paused`; operator uses **Retry** / **Resume Run** |
+
+Implementation: `lib/engine/auto-advance.ts` (`maybeAutoAdvanceWorkflowRun`, `maybeFollowUpAfterCompletedJob`), UI pause summaries in `lib/engine/auto-advance-ui.ts`, chained ticks in `LoopScheduler` (max 25 per start/tick). Project setting: **Enable workflow auto-advance** on the dashboard project form.
+
+## Observability (Phase 05)
+
+Operators inspect engine activity from the dashboard **Loop Engine** panel and project metrics without external telemetry.
+
+| Surface | Route / module | Purpose |
+|---------|----------------|---------|
+| **Job list** | `GET /api/engine/jobs` | Filter by project, task, workflow run, node, status, backend |
+| **Job detail** | `GET /api/engine/jobs/[jobId]` | Full redacted execution log timeline, payload summary, attempts, linked task/workflow node |
+| **Job drawer** | Engine panel UI | Expandable detail: stdout/stderr excerpts, policy decisions, external session ids |
+| **Project metrics** | `getEngineJobMetrics` | Jobs queued/running/completed/failed in last 24h, average duration, failure rate (SQLite) |
+| **Active jobs badge** | Workflow health header | Count of queued + running jobs next to global auto-run indicator |
+| **Operator controls** | `POST .../retry`, `.../cancel`, `.../engine-resume` | Retry failed jobs, cancel in-flight work, resume paused workflow runs — disabled with policy tooltips when blocked |
+
+Log redaction and secret regression coverage mirror [[Security-Policy]] (`tests/loop-engine-security.test.ts`, `tests/loop-engine-observability.test.ts`). Recovery semantics: `lib/engine/engine-job-recovery.ts`.
+
+## Verification (Phase 05)
+
+Full loop verification runs in CI with mocked external CLIs and GitHub APIs:
+
+| Walkthrough | Test file | Coverage |
+|-------------|-----------|------------|
+| **Feature Development Loop** | `tests/workflow-executor-verification.test.ts` | human-input → spec-kit-actions → human-review → import-tasks → create-github-issues (mocked) → agent-orchestrator-implement → run-tests → ai-review → open-pr (mocked) → merge gate pause; board tasks + workflow events at each stage |
+| **Task loop** | `tests/task-loop-integration.test.ts` | Ready low-risk task → engine pickup → stub backend → Needs Review with on-disk context |
+| **Policy gates** | `tests/loop-full-verification.test.ts` | High-risk Ready tasks blocked from automated pickup; merge node never auto-advances |
+| **Auto-advance** | `tests/loop-engine-auto-advance.test.ts` | Chained progression, pause on human node, deny on high-risk |
+| **Recovery** | `tests/loop-engine-recovery.test.ts` | Retry/cancel/resume, idempotent import/GitHub retries |
+| **Observability** | `tests/loop-engine-observability.test.ts` | Job filters, redacted detail, dashboard metrics |
+| **Engine panel UI** | `tests/ui/loop-engine-panel.spec.ts` | Panel visibility, demo job + drawer, auto-run disabled default |
+
+**CI commands:** `npm run db:migrate`, `npm run lint`, `npm run typecheck`, `npm test`, `npm run test:ui`.
+
+Client bundles import only UI-safe engine helpers (`task-loop-eligibility.ts`, `auto-advance-ui.ts`) so Playwright can load the dashboard without pulling `node:child_process` into the webpack graph.
 
 ## Related Documents
 

@@ -64,7 +64,7 @@ import {
   describeEffectiveAutomationPolicy,
   type AutomationSettings,
 } from "@/lib/policies/automation-policy";
-import { extractWorkflowRunPauseReason } from "@/lib/engine/auto-advance";
+import { extractWorkflowRunPauseReason } from "@/lib/engine/auto-advance-ui";
 import type {
   WorkflowFileImportResult,
   WorkflowFileValidationError,

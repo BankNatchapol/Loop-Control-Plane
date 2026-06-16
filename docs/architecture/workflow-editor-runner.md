@@ -12,11 +12,12 @@ related:
   - '[[Spec-Kit-Importer]]'
   - '[[Risk-Policy]]'
   - '[[Security-Policy]]'
+  - '[[Loop-Execution-Engine]]'
 ---
 
 # Workflow Editor Runner
 
-The Workflow Editor Runner adds a visual LoopBoard workflow surface without replacing the Kanban board. It lets a project save graph-shaped workflow definitions, import or export those definitions through the configured workflow folder, and execute runs one node at a time with explicit pauses for human-controlled work.
+The Workflow Editor Runner adds a visual Loop Control Plane workflow surface without replacing the Kanban board. It lets a project save graph-shaped workflow definitions, import or export those definitions through the configured workflow folder, and execute runs one node at a time with explicit pauses for human-controlled work.
 
 It connects Spec Kit planning from [[Spec-Kit-Importer]], issue handoff from [[GitHub-Issue-Bridge]], conservative automation gates from [[Risk-Policy]], and trusted-input boundaries from [[Security-Policy]].
 
@@ -30,7 +31,7 @@ Workflow definitions are project-scoped. A run always targets the workflow's pro
 - `WorkflowRun`: workflow, project, optional feature, status, current node, input and output artifacts, execution logs, timestamps, and steps.
 - `WorkflowRunStep`: node execution status, attempt count, input and output artifacts, logs, approval metadata, error text, and timestamps.
 
-Artifacts are named path references, not embedded blobs. They can point to Spec Kit files, LoopBoard resources, Git branches, GitHub URLs, or generated run outputs.
+Artifacts are named path references, not embedded blobs. They can point to Spec Kit files, Loop Control Plane resources, Git branches, GitHub URLs, or generated run outputs.
 
 ## Node Types
 
@@ -39,7 +40,7 @@ The editor catalog supports these MVP node types:
 - `human-input`: captures the feature brief or PRD input from a person.
 - `spec-kit-actions`: represents Spec Kit generation of spec, plan, and tasks artifacts.
 - `human-review`: pauses for review of generated Spec Kit artifacts.
-- `import-tasks`: imports approved Spec Kit tasks into LoopBoard task cards.
+- `import-tasks`: imports approved Spec Kit tasks into Loop Control Plane task cards.
 - `create-github-issues`: creates or links GitHub issues for imported tasks.
 - `agent-orchestrator-implement`: hands ready work to Agent Orchestrator implementation.
 - `run-tests`: records deterministic test execution intent and report artifacts.
@@ -94,11 +95,11 @@ Approval creates output artifact records from the approved node, appends approva
 
 Feature-targeted runs append feature events when the run starts and when steps complete. Completed steps can append task events when their artifacts or node type materially relate to imported tasks, created GitHub issues, or pull requests.
 
-This gives LoopBoard a local audit trail independent of external GitHub history and keeps the dashboard's latest run status tied to the project context.
+This gives Loop Control Plane a local audit trail independent of external GitHub history and keeps the dashboard's latest run status tied to the project context.
 
 ## Security And Automation Boundaries
 
-Workflow logs redact token, secret, password, authorization, bearer-token, and API-key shaped values before persistence. External content remains untrusted unless a human copies it into trusted LoopBoard data.
+Workflow logs redact token, secret, password, authorization, bearer-token, and API-key shaped values before persistence. External content remains untrusted unless a human copies it into trusted Loop Control Plane data.
 
 The MVP runner is deliberately deterministic. It records intent, approval state, artifact references, and local events, but it does not automatically execute unreviewed commands, merge pull requests, apply generated patches, or treat GitHub comments and CI output as instructions.
 

@@ -11,15 +11,16 @@ related:
   - '[[Task-Context-Files]]'
   - '[[Security-Policy]]'
   - '[[Risk-Policy]]'
+  - '[[Loop-Execution-Engine]]'
 ---
 
 # GitHub Issue Bridge
 
-The GitHub Issue Bridge connects LoopBoard task cards to GitHub issues so a ready task can be handed to Agent Orchestrator with structured context and explicit labels. It builds on imported task context from [[Spec-Kit-Importer]], generated task files from [[Task-Context-Files]], and the approval rules described by [[Security-Policy]] and [[Risk-Policy]].
+The GitHub Issue Bridge connects Loop Control Plane task cards to GitHub issues so a ready task can be handed to Agent Orchestrator with structured context and explicit labels. It builds on imported task context from [[Spec-Kit-Importer]], generated task files from [[Task-Context-Files]], and the approval rules described by [[Security-Policy]] and [[Risk-Policy]].
 
 ## Configuration
 
-GitHub integration is optional. A project can store a GitHub repository as `owner/name`, and LoopBoard can infer that value from a detected GitHub remote when available.
+GitHub integration is optional. A project can store a GitHub repository as `owner/name`, and Loop Control Plane can infer that value from a detected GitHub remote when available.
 
 Server-side GitHub access uses only environment tokens:
 
@@ -42,16 +43,16 @@ These states keep the main board usable even when GitHub is not configured.
 
 ## Label Protocol
 
-LoopBoard manages a small label vocabulary for task routing and handoff:
+Loop Control Plane manages a small label vocabulary for task routing and handoff:
 
-- `loopboard`: issue was created or managed through LoopBoard.
+- `loopboard`: issue was created or managed through Loop Control Plane.
 - `ao-ready`: issue is ready for Agent Orchestrator pickup.
 - `human-working`: a human is actively working the task.
 - `human-review-needed`: human review is required before handoff or completion.
 - `risk-low`, `risk-medium`, `risk-high`: task risk labels. Critical tasks map to `risk-high`.
 - `area-frontend`, `area-backend`, `area-infra`, `area-test`: inferred work area labels.
 
-Label setup is idempotent. LoopBoard checks each required label and creates missing labels only. Existing labels are left unchanged because the app does not persist provenance that would prove LoopBoard created them.
+Label setup is idempotent. Loop Control Plane checks each required label and creates missing labels only. Existing labels are left unchanged because the app does not persist provenance that would prove Loop Control Plane created them.
 
 Issue creation applies labels from task state and risk policy:
 
@@ -71,30 +72,30 @@ Users can explicitly mark or remove `ao-ready` from task details. These external
 
 ## Issue Template
 
-Issue bodies are deterministic and generated from trusted LoopBoard data:
+Issue bodies are deterministic and generated from trusted Loop Control Plane data:
 
-- Trusted LoopBoard task metadata: project, feature, task, status, owner, mode, risk, source, branch, and worktree.
+- Trusted Loop Control Plane task metadata: project, feature, task, status, owner, mode, risk, source, branch, and worktree.
 - Task details.
 - Source artifact paths, including feature artifacts and task context paths.
 - Acceptance criteria.
 - Trusted agent instructions.
 - Trusted human notes.
 - Explicit warning that external GitHub comments are untrusted.
-- Calculated LoopBoard labels.
+- Calculated Loop Control Plane labels.
 
 The issue body is intended to be a handoff brief. It should point agents to source artifacts rather than duplicating every artifact inline.
 
 ## Trusted And Untrusted Instructions
 
-LoopBoard task data, source artifact paths, acceptance criteria, task context files, and human notes recorded inside LoopBoard are trusted workflow inputs.
+Loop Control Plane task data, source artifact paths, acceptance criteria, task context files, and human notes recorded inside Loop Control Plane are trusted workflow inputs.
 
-GitHub comments, review text, CI output, issue edits made directly in GitHub, and other external GitHub content are untrusted context. Agents and workflow runners must not treat that content as execution instructions unless a human copies the instruction into trusted LoopBoard notes or task data.
+GitHub comments, review text, CI output, issue edits made directly in GitHub, and other external GitHub content are untrusted context. Agents and workflow runners must not treat that content as execution instructions unless a human copies the instruction into trusted Loop Control Plane notes or task data.
 
-This boundary is repeated in generated issue bodies so future comments on the issue cannot silently override the LoopBoard task.
+This boundary is repeated in generated issue bodies so future comments on the issue cannot silently override the Loop Control Plane task.
 
 ## Persistence And Events
 
-When LoopBoard creates a GitHub issue, it stores the issue URL, issue number, current issue labels, and last sync timestamp in task GitHub state. It also appends an `ISSUE_CREATED` event.
+When Loop Control Plane creates a GitHub issue, it stores the issue URL, issue number, current issue labels, and last sync timestamp in task GitHub state. It also appends an `ISSUE_CREATED` event.
 
 Label sync and handoff actions append task events such as:
 
@@ -108,9 +109,9 @@ These events provide a local audit trail independent of GitHub history.
 ## Known Limitations
 
 - GitHub issue creation and label sync require a server environment token; browser-only configuration is not supported.
-- LoopBoard does not currently prove label provenance, so it never overwrites existing label descriptions or colors.
+- Loop Control Plane does not currently prove label provenance, so it never overwrites existing label descriptions or colors.
 - The bridge stores issue numbers, URLs, labels, and sync timestamps, but not full GitHub issue history.
 - `ao-ready` sync is label-based. It does not assign GitHub users, start external runners, or guarantee that Agent Orchestrator has picked up the issue.
 - Area labels are inferred heuristically and may need human correction.
 - Critical risk maps to `risk-high` because the current GitHub label vocabulary has no separate `risk-critical` label.
-- External GitHub content remains untrusted even when it appears on a LoopBoard-linked issue.
+- External GitHub content remains untrusted even when it appears on a Loop Control Plane-linked issue.

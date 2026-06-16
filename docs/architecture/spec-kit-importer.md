@@ -10,11 +10,12 @@ related:
   - '[[Project-And-Feature-Model]]'
   - '[[Task-Context-Files]]'
   - '[[Risk-Policy]]'
+  - '[[Loop-Execution-Engine]]'
 ---
 
 # Spec Kit Importer
 
-The Spec Kit importer turns a feature's `tasks.md` checklist into editable LoopBoard task cards. It is feature-scoped: the importer reads the feature's linked `tasks.md`, previews parsed tasks without writes, lets the user edit or exclude tasks, and then creates approved tasks on the Kanban board.
+The Spec Kit importer turns a feature's `tasks.md` checklist into editable Loop Control Plane task cards. It is feature-scoped: the importer reads the feature's linked `tasks.md`, previews parsed tasks without writes, lets the user edit or exclude tasks, and then creates approved tasks on the Kanban board.
 
 This behavior depends on the feature artifact model described by [[Project-And-Feature-Model]], the generated execution files described by [[Task-Context-Files]], and the conservative task classification rules summarized by [[Risk-Policy]].
 
@@ -110,6 +111,6 @@ Duplicates are marked in preview and skipped during import. Excluded preview tas
 - The parser is not a full Markdown AST parser; it intentionally supports common Spec Kit checklist shapes with deterministic line rules.
 - Only checkbox list items become tasks. Tables, prose-only task lists, and unchecked text without `- [ ]` or `* [ ]` are not imported as tasks.
 - Source task IDs are not stored as a first-class task column; duplicate detection reads them from `TASK_IMPORTED` event metadata.
-- Dependency references remain source IDs or numeric IDs from `tasks.md`; they are not automatically rewritten to LoopBoard task IDs.
+- Dependency references remain source IDs or numeric IDs from `tasks.md`; they are not automatically rewritten to Loop Control Plane task IDs.
 - Artifact discovery is limited to the known sibling files listed above and the feature's configured artifact paths.
 - Heuristic labels and risk are conservative aids for preview, not policy enforcement. Users should review high-impact imports before creating tasks.

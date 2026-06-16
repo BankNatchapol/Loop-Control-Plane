@@ -20,7 +20,6 @@ import {
   tickEngine,
 } from "@/lib/api/engine-actions";
 import { LoopBoardRepository } from "@/lib/db/loopboard-repository";
-import { LoopSchedulerError } from "@/lib/engine/loop-scheduler";
 import { EnginePolicyError } from "@/lib/policies/automation-policy";
 import { seedProject } from "@/lib/loopboard";
 

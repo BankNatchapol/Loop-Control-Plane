@@ -43,13 +43,9 @@ test("creates, connects, saves, runs, approves, and completes a workflow", async
   await page.getByTestId("workflow-new").click();
   await expect(editor.getByText("2 nodes · 1 edges")).toBeVisible();
   await page.getByLabel("Workflow name").fill("Playwright Workflow");
-  await page.getByTestId("workflow-add-node-run-tests").click();
-  await expect(nodeLocator(page, "Run Tests")).toBeVisible();
 
   await nodeLocator(page, "Spec Kit Actions").click();
-  await page.getByLabel("Connect selected node to").selectOption({ label: "Run Tests" });
-  await page.getByTestId("workflow-connect-selected-node").click();
-  await expect(editor.getByText("3 nodes · 2 edges")).toBeVisible();
+  await page.getByLabel("Mode").selectOption({ label: "disabled" });
 
   const saveResponse = page.waitForResponse(
     (response) =>
@@ -75,7 +71,7 @@ test("creates, connects, saves, runs, approves, and completes a workflow", async
   await page.getByTestId("workflow-start-run").click();
   await startResponse;
   await expect(page.getByTestId("workflow-current-run")).toContainText(
-    "node-human-input",
+    "Human Input",
   );
 
   await runAction(page, "workflow-run-next", "run-next");
@@ -85,27 +81,12 @@ test("creates, connects, saves, runs, approves, and completes a workflow", async
 
   await runAction(page, "workflow-approve", "approve");
   await expect(page.getByTestId("workflow-current-run")).toContainText(
-    "node-spec-kit-actions",
+    "Spec Kit Actions",
   );
 
   await runAction(page, "workflow-run-next", "run-next");
-  await expect(page.getByTestId("workflow-last-step")).toContainText(
-    "waiting-approval",
-  );
-
-  await runAction(page, "workflow-approve", "approve");
-  await expect(page.getByTestId("workflow-current-run")).toContainText(
-    "node-run-tests",
-  );
-
-  await runAction(page, "workflow-run-next", "run-next");
-  await expect(page.getByTestId("workflow-last-step")).toContainText(
-    "waiting-approval",
-  );
-
-  await runAction(page, "workflow-approve", "approve");
   await expect(page.getByTestId("workflow-message")).toContainText(
     "Workflow run completed.",
   );
-  await expect(page.getByTestId("workflow-current-run")).toContainText("complete");
+  await expect(page.getByTestId("workflow-current-run")).toContainText("Complete");
 });

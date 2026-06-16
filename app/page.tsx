@@ -108,7 +108,7 @@ import type {
   EngineStatusResponse,
   EngineJobSummary,
 } from "@/lib/api/engine-actions";
-import { isTaskStructurallyEligible } from "@/lib/engine/task-loop-planner";
+import { isTaskStructurallyEligible } from "@/lib/engine/task-loop-eligibility";
 import {
   EXECUTOR_BACKENDS,
   type EngineJobStatus,
