@@ -632,7 +632,10 @@ const eventTypes = new Set<TaskEventType>([
   "AO_READY_APPROVED",
   "HANDOFF_READY",
   "WORKFLOW_STEP_COMPLETED",
+  "ENGINE_PICKUP",
   "ENGINE_PICKUP_SKIPPED",
+  "ENGINE_TASK_COMPLETED",
+  "ENGINE_TASK_FAILED",
 ]);
 const featureEventTypes = new Set<FeatureEventType>([
   "SPEC_APPROVED",

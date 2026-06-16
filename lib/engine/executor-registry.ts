@@ -1,6 +1,7 @@
 import type { LoopBoardRepository } from "@/lib/db/loopboard-repository";
 import { dispatchWorkflowStepJob } from "@/lib/engine/executors/workflow-step-dispatcher";
-import { redactSensitiveText } from "@/lib/security/safe-context";
+import { executeDeterministicStubJob } from "@/lib/engine/stub-executor-job";
+import { executeTaskRunJob } from "@/lib/engine/task-run-executor";
 
 import {
   defaultExecutorConfig,
@@ -51,37 +52,11 @@ export class ExecutorRegistryError extends Error {
   }
 }
 
-const nowIso = (): string => new Date().toISOString();
-
-const logEntry = (
-  level: EngineRunLogEntry["level"],
-  message: string,
-  metadata: EngineRunLogEntry["metadata"] = {},
-): EngineRunLogEntry => ({
-  timestamp: nowIso(),
-  level,
-  message: redactSensitiveText(message),
-  metadata,
-});
-
-const summarizeOutput = (value: string | undefined): string | undefined => {
-  if (!value) {
-    return undefined;
-  }
-
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    return undefined;
-  }
-
-  const redacted = redactSensitiveText(trimmed);
-  return redacted.length > 240 ? `${redacted.slice(0, 237)}...` : redacted;
-};
-
 const activeStubJobs = new Set<string>();
 
 export type StubExecutorOptions = {
   workflowStepHandler?: (context: ExecutorContext) => Promise<ExecutorResult>;
+  taskRunHandler?: (context: ExecutorContext) => Promise<ExecutorResult>;
 };
 
 export class StubExecutor implements Executor {
@@ -103,54 +78,17 @@ export class StubExecutor implements Executor {
       return this.options.workflowStepHandler(context);
     }
 
-    activeStubJobs.add(context.job.id);
-
-    const logs: EngineRunLogEntry[] = [
-      logEntry("info", `Stub executor started ${context.job.kind} job.`, {
-        jobId: context.job.id,
-        backend: this.backend,
-      }),
-    ];
-
-    if (context.signal?.aborted) {
-      activeStubJobs.delete(context.job.id);
-      return {
-        success: false,
-        error: "Execution cancelled before stub executor completed.",
-        logs: [
-          ...logs,
-          logEntry("warn", "Stub executor cancelled before completion."),
-        ],
-      };
+    if (context.job.kind === "task-run" && this.options.taskRunHandler) {
+      return this.options.taskRunHandler(context);
     }
 
-    const stdout = summarizeOutput(
-      typeof context.config.command === "string"
-        ? `stub stdout: ${context.config.command}`
-        : `stub stdout: completed deterministically (${context.job.kind})`,
-    );
-    const stderr = summarizeOutput("stub stderr: (empty)");
+    activeStubJobs.add(context.job.id);
 
-    logs.push(
-      logEntry("info", "Stub executor completed deterministically.", {
-        stdoutSummary: stdout,
-        stderrSummary: stderr,
-      }),
-    );
-
-    activeStubJobs.delete(context.job.id);
-
-    return {
-      success: true,
-      stdoutSummary: stdout,
-      stderrSummary: stderr,
-      result: {
-        backend: this.backend,
-        kind: context.job.kind,
-        completedDeterministically: true,
-      },
-      logs,
-    };
+    try {
+      return await executeDeterministicStubJob(context);
+    } finally {
+      activeStubJobs.delete(context.job.id);
+    }
   }
 
   async cancel(jobId: string): Promise<void> {
@@ -167,6 +105,8 @@ export const createExecutorRegistryForRepository = (
     new StubExecutor({
       workflowStepHandler: (context) =>
         dispatchWorkflowStepJob(context, { repository }),
+      taskRunHandler: (context) =>
+        executeTaskRunJob(context, { repository }),
     }),
   ]);
 
