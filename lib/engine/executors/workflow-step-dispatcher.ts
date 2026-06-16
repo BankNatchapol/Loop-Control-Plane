@@ -9,7 +9,11 @@ import {
   defaultProcessRunner,
 } from "@/lib/engine/process-runner";
 
+import { executeAiReview } from "@/lib/engine/executors/ai-review-executor";
+import { executeCreateGitHubIssues } from "@/lib/engine/executors/create-github-issues-executor";
 import { executeImportTasks } from "@/lib/engine/executors/import-tasks-executor";
+import { executeOpenPr } from "@/lib/engine/executors/open-pr-executor";
+import { executeRunTests } from "@/lib/engine/executors/run-tests-executor";
 import { executeSpecKitActions } from "@/lib/engine/executors/spec-kit-actions-executor";
 import { parseWorkflowStepJobPayload } from "@/lib/engine/executors/workflow-step-types";
 
@@ -34,6 +38,7 @@ const toExecutorResult = (
   result: {
     ...stepResult.result,
     errorCode: stepResult.errorCode,
+    branchLabel: stepResult.branchLabel,
     outputArtifacts: stepResult.outputArtifacts,
   },
   logs: stepResult.logs,
@@ -108,6 +113,95 @@ export const dispatchWorkflowStepJob = async (
       featureId,
       inputArtifacts: payload.inputArtifacts,
       outputArtifacts: payload.outputArtifacts,
+    });
+
+    return toExecutorResult(stepResult);
+  }
+
+  if (payload.nodeType === "create-github-issues") {
+    const featureId = payload.featureId ?? context.job.payload.featureId;
+    if (typeof featureId !== "string" || featureId.length === 0) {
+      return {
+        success: false,
+        error: "Create GitHub issues workflow step requires a linked featureId.",
+        logs: [
+          {
+            timestamp: new Date().toISOString(),
+            level: "error",
+            message: "Missing featureId for create-github-issues workflow step.",
+            metadata: { jobId: context.job.id },
+          },
+        ],
+      };
+    }
+
+    const stepResult = await executeCreateGitHubIssues({
+      repository: deps.repository,
+      featureId,
+      workflowRunId: payload.workflowRunId,
+      outputArtifacts: payload.outputArtifacts,
+    });
+
+    return toExecutorResult(stepResult);
+  }
+
+  if (payload.nodeType === "open-pr") {
+    const featureId = payload.featureId ?? context.job.payload.featureId;
+    if (typeof featureId !== "string" || featureId.length === 0) {
+      return {
+        success: false,
+        error: "Open PR workflow step requires a linked featureId.",
+        logs: [
+          {
+            timestamp: new Date().toISOString(),
+            level: "error",
+            message: "Missing featureId for open-pr workflow step.",
+            metadata: { jobId: context.job.id },
+          },
+        ],
+      };
+    }
+
+    const stepResult = await executeOpenPr({
+      repository: deps.repository,
+      featureId,
+      workflowRunId: payload.workflowRunId,
+      inputArtifacts: payload.inputArtifacts,
+      outputArtifacts: payload.outputArtifacts,
+      projectRepoPath: project.repoPath,
+      cwd: executorConfig.cwd ?? executorConfig.workingDirectory ?? project.repoPath,
+      timeoutMs: executorConfig.timeoutMs,
+      useGhCreateFallback: executorConfig.backend === "stub",
+    });
+
+    return toExecutorResult(stepResult);
+  }
+
+  if (payload.nodeType === "run-tests") {
+    const stepResult = await executeRunTests({
+      projectRepoPath: project.repoPath,
+      workflowRunId: payload.workflowRunId,
+      featureId:
+        typeof payload.featureId === "string" ? payload.featureId : undefined,
+      inputArtifacts: payload.inputArtifacts,
+      outputArtifacts: payload.outputArtifacts,
+      args: executorConfig.args,
+      cwd: executorConfig.cwd ?? executorConfig.workingDirectory ?? project.repoPath,
+      timeoutMs: executorConfig.timeoutMs,
+      processRunner,
+    });
+
+    return toExecutorResult(stepResult);
+  }
+
+  if (payload.nodeType === "ai-review") {
+    const stepResult = executeAiReview({
+      workflowRunId: payload.workflowRunId,
+      featureId:
+        typeof payload.featureId === "string" ? payload.featureId : undefined,
+      inputArtifacts: payload.inputArtifacts,
+      outputArtifacts: payload.outputArtifacts,
+      backend: executorConfig.backend,
     });
 
     return toExecutorResult(stepResult);

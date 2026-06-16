@@ -15,6 +15,7 @@ export type WorkflowStepExecutorResult = {
   success: boolean;
   error?: string;
   errorCode?: string;
+  branchLabel?: string;
   outputArtifacts?: WorkflowArtifact[];
   result?: Record<string, unknown>;
   logs: EngineRunLogEntry[];
