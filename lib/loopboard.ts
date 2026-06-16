@@ -169,6 +169,24 @@ export interface WorkflowLogEntry {
   metadata?: Record<string, string | number | boolean | null>;
 }
 
+export type WorkflowNodeExecutorSettings = {
+  backend: string;
+  args?: string[];
+  cwd?: string;
+  timeoutMs?: number;
+  /** @deprecated Prefer nested `executor.args` instead of top-level command strings. */
+  command?: string;
+  /** @deprecated Prefer `executor.cwd` instead. */
+  workingDirectory?: string;
+};
+
+export type WorkflowNodeConfig = Record<string, unknown> & {
+  executor?: WorkflowNodeExecutorSettings;
+  command?: string;
+  commands?: string[];
+  optional?: boolean;
+};
+
 export interface WorkflowNode {
   id: string;
   workflowId: string;
@@ -184,7 +202,7 @@ export interface WorkflowNode {
   requireApproval: boolean;
   maxRetries: number;
   riskPolicy: WorkflowRiskPolicy;
-  config: Record<string, unknown>;
+  config: WorkflowNodeConfig;
   currentState: WorkflowNodeState;
   createdAt: string;
   updatedAt: string;
@@ -436,7 +454,7 @@ const BASE_TIMESTAMP = "2026-06-14T02:00:00.000Z";
 
 export const seedProject: Project = {
   id: "project-loopboard",
-  name: "LoopBoard MVP",
+  name: "Loop Control Plane MVP",
   description:
     "Local control plane for supervising AI coding loops, handoffs, and review flow.",
   repository: "bank-p/loop-control-plane",
@@ -895,7 +913,7 @@ export const seedTasks: Task[] = [
     id: "task-import-spec-kit-board",
     projectId: seedProject.id,
     featureId: "feature-kanban-control-plane",
-    title: "Import Spec Kit tasks into LoopBoard",
+    title: "Import Spec Kit tasks into Loop Control Plane",
     description:
       "Parse the approved Spec Kit plan and turn each implementation step into trackable local board cards.",
     status: "spec-review",

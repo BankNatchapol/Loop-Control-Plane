@@ -1,3 +1,4 @@
+import { withExecutorConfig } from "@/lib/engine/loop-engine-types";
 import type {
   Workflow,
   WorkflowArtifact,
@@ -10,6 +11,10 @@ import {
   isShellCapableWorkflowNode,
   workflowNodeShellWarning,
 } from "@/lib/policies/automation-policy";
+import {
+  defaultExecutorConfigForNodeType,
+  isWorkflowApprovalGateNode,
+} from "@/lib/engine/workflow-node-executor-map";
 
 export const workflowNodeTypes = [
   "human-input",
@@ -78,6 +83,22 @@ export type WorkflowEditorSaveInput = Pick<
   "name" | "description" | "version" | "nodes" | "edges" | "config"
 >;
 
+const catalogNodeConfig = (
+  type: WorkflowEditorNodeType,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> => {
+  if (isWorkflowApprovalGateNode(type)) {
+    return extra;
+  }
+
+  const defaults = defaultExecutorConfigForNodeType(type);
+  if (!defaults) {
+    return extra;
+  }
+
+  return withExecutorConfig(extra, defaults);
+};
+
 export const workflowNodeCatalog: Array<{
   type: WorkflowEditorNodeType;
   name: string;
@@ -134,7 +155,7 @@ export const workflowNodeCatalog: Array<{
       { name: "plan", path: "specs/{feature}/plan.md", required: true },
       { name: "tasks", path: "specs/{feature}/tasks.md", required: true },
     ],
-    config: {},
+    config: catalogNodeConfig("spec-kit-actions"),
   },
   {
     type: "import-tasks",
@@ -147,7 +168,7 @@ export const workflowNodeCatalog: Array<{
     outputArtifacts: [
       { name: "loopboard-tasks", path: "loopboard://feature/{feature}/tasks", required: true },
     ],
-    config: {},
+    config: catalogNodeConfig("import-tasks"),
   },
   {
     type: "create-github-issues",
@@ -162,7 +183,7 @@ export const workflowNodeCatalog: Array<{
     outputArtifacts: [
       { name: "github-issues", path: "https://github.com/{repository}/issues", required: true },
     ],
-    config: {},
+    config: catalogNodeConfig("create-github-issues"),
   },
   {
     type: "agent-orchestrator-implement",
@@ -177,7 +198,7 @@ export const workflowNodeCatalog: Array<{
     outputArtifacts: [
       { name: "implementation-branch", path: "git://{repository}/{branch}", required: true },
     ],
-    config: {},
+    config: catalogNodeConfig("agent-orchestrator-implement"),
   },
   {
     type: "run-tests",
@@ -192,7 +213,7 @@ export const workflowNodeCatalog: Array<{
     outputArtifacts: [
       { name: "test-report", path: "loopboard://runs/{run}/test-report", required: true },
     ],
-    config: { command: "npm test" },
+    config: catalogNodeConfig("run-tests", { command: "npm test" }),
   },
   {
     type: "ai-review",
@@ -208,7 +229,7 @@ export const workflowNodeCatalog: Array<{
     outputArtifacts: [
       { name: "review-notes", path: "loopboard://runs/{run}/review-notes", required: true },
     ],
-    config: {},
+    config: catalogNodeConfig("ai-review"),
   },
   {
     type: "open-pr",
@@ -223,7 +244,7 @@ export const workflowNodeCatalog: Array<{
     outputArtifacts: [
       { name: "pull-request", path: "https://github.com/{repository}/pulls", required: true },
     ],
-    config: {},
+    config: catalogNodeConfig("open-pr"),
   },
   {
     type: "merge",

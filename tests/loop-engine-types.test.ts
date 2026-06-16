@@ -41,6 +41,8 @@ describe("Loop engine types", () => {
     const valid = validateExecutorConfig({
       backend: "stub",
       command: "echo ping",
+      args: ["test"],
+      cwd: "/tmp/project",
       timeoutMs: 5000,
       envAllowlist: ["PATH"],
     });
@@ -50,6 +52,9 @@ describe("Loop engine types", () => {
       assert.deepEqual(valid.config, {
         backend: "stub",
         command: "echo ping",
+        args: ["test"],
+        workingDirectory: "/tmp/project",
+        cwd: "/tmp/project",
         timeoutMs: 5000,
         envAllowlist: ["PATH"],
       });

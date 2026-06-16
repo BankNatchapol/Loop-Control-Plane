@@ -9,6 +9,7 @@ tags:
   - loopboard
 related:
   - '[[Workflow-Editor-Runner]]'
+  - '[[Workflow-Node-Executors]]'
   - '[[Risk-Policy]]'
   - '[[Security-Policy]]'
 ---
@@ -189,7 +190,7 @@ Phase 01 is a **foundation skeleton**, not full autonomous loop execution:
 - **No global auto-run by default** — Operators must explicitly enable automation before the scheduler runs unattended.
 - **No distributed queue** — Single-process SQLite queue; no Redis, no multi-instance coordination.
 
-Future phases will register real executors following the narrow adapter pattern from `lib/system/local-command-runner.ts`, wire workflow nodes to `workflow-step` jobs, and connect task context handoff artifacts to `task-run` execution.
+Future phases will register real executors following the narrow adapter pattern from `lib/system/local-command-runner.ts`, wire workflow nodes to `workflow-step` jobs, and connect task context handoff artifacts to `task-run` execution. See [[Workflow-Node-Executors]] for the Phase 03 node-type mapping and config schema.
 
 ## Related Documents
 

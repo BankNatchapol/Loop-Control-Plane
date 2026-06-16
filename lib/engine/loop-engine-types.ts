@@ -18,11 +18,22 @@ export type EngineSchedulerState = "stopped" | "running" | "paused";
 
 export type ExecutorConfig = {
   backend: ExecutorBackend;
+  /** Legacy single command string; prefer `args` for argv-style invocation. */
   command?: string;
+  /** CLI arguments passed without shell interpolation. */
+  args?: string[];
+  /** Legacy working directory field; prefer `cwd`. */
   workingDirectory?: string;
+  /** Project-relative or absolute cwd constrained by process-runner validation. */
+  cwd?: string;
   timeoutMs?: number;
   envAllowlist?: string[];
 };
+
+export type WorkflowNodeExecutorConfig = Pick<
+  ExecutorConfig,
+  "backend" | "args" | "cwd" | "timeoutMs" | "command" | "workingDirectory"
+>;
 
 export type EngineRunLogLevel = "info" | "warn" | "error";
 
@@ -153,6 +164,18 @@ export const validateExecutorConfig = (
     issues.push({ field: "command", message: "Command must be a string." });
   }
 
+  if (value.args !== undefined) {
+    if (
+      !Array.isArray(value.args) ||
+      !value.args.every((entry) => typeof entry === "string")
+    ) {
+      issues.push({
+        field: "args",
+        message: "Args must be an array of strings.",
+      });
+    }
+  }
+
   if (
     value.workingDirectory !== undefined &&
     typeof value.workingDirectory !== "string"
@@ -161,6 +184,10 @@ export const validateExecutorConfig = (
       field: "workingDirectory",
       message: "Working directory must be a string.",
     });
+  }
+
+  if (value.cwd !== undefined && typeof value.cwd !== "string") {
+    issues.push({ field: "cwd", message: "Working directory must be a string." });
   }
 
   if (value.timeoutMs !== undefined) {
@@ -192,14 +219,24 @@ export const validateExecutorConfig = (
     };
   }
 
+  const workingDirectory =
+    typeof value.cwd === "string"
+      ? value.cwd
+      : typeof value.workingDirectory === "string"
+        ? value.workingDirectory
+        : undefined;
+
+  const args = Array.isArray(value.args)
+    ? value.args.filter((entry): entry is string => typeof entry === "string")
+    : undefined;
+
   return {
     ok: true,
     config: {
       backend: value.backend as ExecutorBackend,
       ...(typeof value.command === "string" ? { command: value.command } : {}),
-      ...(typeof value.workingDirectory === "string"
-        ? { workingDirectory: value.workingDirectory }
-        : {}),
+      ...(args && args.length > 0 ? { args } : {}),
+      ...(workingDirectory ? { workingDirectory, cwd: workingDirectory } : {}),
       ...(typeof value.timeoutMs === "number" ? { timeoutMs: value.timeoutMs } : {}),
       ...(isStringArray(value.envAllowlist)
         ? { envAllowlist: value.envAllowlist }

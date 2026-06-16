@@ -7,6 +7,7 @@ import type {
   WorkflowRiskPolicy,
 } from "@/lib/loopboard";
 import { defaultProjectAutomationPolicy } from "@/lib/loopboard";
+import { readExecutorConfig } from "@/lib/engine/loop-engine-types";
 
 export type PolicyDecisionKind = "allow" | "requires-approval" | "deny";
 
@@ -94,11 +95,14 @@ export const isShellCapableWorkflowNode = (
 ): boolean => {
   const command = node.config.command;
   const commands = node.config.commands;
+  const executor = readExecutorConfig(node.config);
 
   return (
     node.type === "run-tests" ||
     typeof command === "string" ||
-    (Array.isArray(commands) && commands.some((item) => typeof item === "string"))
+    (Array.isArray(commands) && commands.some((item) => typeof item === "string")) ||
+    typeof executor?.command === "string" ||
+    Boolean(executor?.args && executor.args.length > 0)
   );
 };
 
@@ -534,7 +538,7 @@ export const evaluateGlobalAutomationPolicy = (
         kind: "deny",
         code: "global_auto_run_disabled",
         message: "Global auto-run is disabled by default.",
-        reasons: ["LoopBoard keeps background automation off unless explicitly enabled."],
+        reasons: ["Loop Control Plane keeps background automation off unless explicitly enabled."],
       });
 
 export const describeEffectiveAutomationPolicy = ({
