@@ -24,11 +24,14 @@ describe("workflow executor editor helpers", () => {
     assert.equal(isAutomatableWorkflowNodeType(node.type), true);
     assert.equal(readExecutorEditorState(node).backend, "stub");
     assert.match(readExecutorEditorState(node).argsText, /spec/u);
+    assert.equal(readExecutorEditorState(node).model, "");
+    assert.equal(readExecutorEditorState(node).fanOutMaxConcurrency, "");
 
     const nextConfig = applyExecutorEditorPatch(node, {
       backend: "cursor",
       argsText: "spec, plan",
       timeoutMs: "120000",
+      model: "composer-2.5-fast",
     });
 
     const updated = { ...node, config: nextConfig };
@@ -37,6 +40,26 @@ describe("workflow executor editor helpers", () => {
     assert.equal(state.backend, "cursor");
     assert.equal(state.argsText, "spec, plan");
     assert.equal(state.timeoutMs, "120000");
+    assert.equal(state.model, "composer-2.5-fast");
+  });
+
+  it("reads and applies Agent Orchestrator fan-out settings", () => {
+    const node = createCatalogWorkflowNode({
+      type: "spec-kit-actions",
+      workflowId: "workflow-ao-fanout",
+      index: 0,
+    });
+
+    const nextConfig = applyExecutorEditorPatch(node, {
+      backend: "agent-orchestrator",
+      fanOutMaxConcurrency: "2",
+      fanOutIssueIdsText: "101, 102",
+    });
+    const state = readExecutorEditorState({ ...node, config: nextConfig });
+
+    assert.equal(state.backend, "agent-orchestrator");
+    assert.equal(state.fanOutMaxConcurrency, "2");
+    assert.equal(state.fanOutIssueIdsText, "101, 102");
   });
 
   it("parses comma-separated executor args", () => {

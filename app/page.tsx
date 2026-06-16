@@ -66,6 +66,7 @@ import {
   enqueueEngineDemoJob,
   enqueueTaskLoop,
   fetchBoardData,
+  fetchBackendAvailability,
   fetchEngineStatus,
   generatePersistedTaskClaudeCodePrompt,
   importSpecKitTasks,
@@ -94,12 +95,15 @@ import {
   type HandoffDocumentActionResult,
   type TaskContextActionResult,
   type TaskOpenActionResult,
+  type BackendAvailabilityResponse,
 } from "@/lib/api/loopboard-client";
 import type { EngineStatusResponse, EngineJobSummary } from "@/lib/api/engine-actions";
 import { isTaskStructurallyEligible } from "@/lib/engine/task-loop-planner";
-import type {
-  EngineJobStatus,
-  EngineSchedulerState,
+import {
+  EXECUTOR_BACKENDS,
+  type EngineJobStatus,
+  type EngineSchedulerState,
+  type ExecutorBackend,
 } from "@/lib/engine/loop-engine-types";
 import type { TaskContextStatus } from "@/lib/context/task-context-service";
 import type { BoardData, PersistedTask } from "@/lib/db/loopboard-repository";
@@ -114,6 +118,7 @@ import {
   FEATURE_ARTIFACT_FILES,
   featureArtifactCompleteness,
   featureStatusLabel,
+  defaultProjectEngineSettings,
   type KanbanStatus,
   type Feature,
   type FeatureApprovalArtifactName,
@@ -122,6 +127,7 @@ import {
   type RiskLevel,
   type Project,
   type ProjectAutomationPolicy,
+  type ProjectEngineSettings,
   type TaskMode,
   type TaskOwner,
   type TaskSource,
@@ -159,6 +165,7 @@ type ProjectFormState = {
   workflowsPath: string;
   handoffsPath: string;
   automationPolicy: ProjectAutomationPolicy;
+  engineSettings: ProjectEngineSettings;
 };
 
 type FeatureFormState = {
@@ -218,6 +225,7 @@ const emptyProjectForm: ProjectFormState = {
     mediumRiskRequiresReview: true,
     highRiskManualOnly: true,
   },
+  engineSettings: defaultProjectEngineSettings,
 };
 
 const projectToForm = (project?: Project): ProjectFormState =>
@@ -234,6 +242,7 @@ const projectToForm = (project?: Project): ProjectFormState =>
         workflowsPath: project.workflowsPath,
         handoffsPath: project.handoffsPath,
         automationPolicy: project.automationPolicy,
+        engineSettings: project.engineSettings,
       }
     : emptyProjectForm;
 
@@ -1215,6 +1224,8 @@ const engineJobStatusStyles: Record<EngineJobStatus, string> = {
 function LoopEnginePanel({
   project,
   engineStatus,
+  backendAvailability,
+  isLoadingBackendAvailability,
   isLoading,
   engineAction,
   engineError,
@@ -1229,6 +1240,8 @@ function LoopEnginePanel({
 }: {
   project?: Project;
   engineStatus: EngineStatusResponse | null;
+  backendAvailability: BackendAvailabilityResponse | null;
+  isLoadingBackendAvailability: boolean;
   isLoading: boolean;
   engineAction: string;
   engineError: string;
@@ -1331,6 +1344,38 @@ function LoopEnginePanel({
           <p className="mt-0.5 line-clamp-2 text-[10px] text-slate-500">
             {engineStatus?.scheduler.lastError ?? "No scheduler errors recorded."}
           </p>
+        </div>
+      </div>
+
+      <div className="mt-3 border border-slate-200 bg-white p-2" data-testid="backend-availability-chips">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-[10px] font-semibold uppercase text-slate-500">
+            Backend Availability
+          </p>
+          {isLoadingBackendAvailability ? (
+            <RefreshCw className="h-3 w-3 animate-spin text-slate-400" />
+          ) : null}
+        </div>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {(backendAvailability?.backends ?? []).map((chip) => (
+            <span
+              key={chip.backend}
+              title={chip.message}
+              className={clsx(
+                "inline-flex border px-1.5 py-0.5 text-[10px] font-semibold uppercase",
+                chip.available
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                  : "border-amber-200 bg-amber-50 text-amber-900",
+              )}
+            >
+              {chip.label}
+            </span>
+          ))}
+          {!backendAvailability?.backends.length ? (
+            <span className="text-[10px] leading-5 text-slate-500">
+              Availability checks have not loaded yet.
+            </span>
+          ) : null}
         </div>
       </div>
 
@@ -1613,6 +1658,134 @@ function ProjectForm({
               </span>
             </label>
           ))}
+        </div>
+      </div>
+      <div className="mt-3 border border-slate-200 bg-slate-50 p-3">
+        <p className="text-xs font-semibold uppercase text-slate-500">
+          Engine Backends
+        </p>
+        <p className="mt-1 text-xs leading-5 text-slate-500">
+          Default executors for task runs and reviews. Node-level workflow config
+          can override these per step.
+        </p>
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+            Default Task Backend
+            <select
+              value={form.engineSettings.defaultTaskBackend ?? "stub"}
+              onChange={(event) =>
+                onChange("engineSettings", {
+                  ...form.engineSettings,
+                  defaultTaskBackend: event.target.value as ExecutorBackend,
+                })
+              }
+              className="min-h-9 border border-slate-300 bg-white px-2 text-sm font-normal normal-case text-slate-950"
+            >
+              {EXECUTOR_BACKENDS.map((backend) => (
+                <option key={backend} value={backend}>
+                  {compactText(backend)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+            Default Review Backend
+            <select
+              value={form.engineSettings.defaultReviewBackend ?? "stub"}
+              onChange={(event) =>
+                onChange("engineSettings", {
+                  ...form.engineSettings,
+                  defaultReviewBackend: event.target.value as ExecutorBackend,
+                })
+              }
+              className="min-h-9 border border-slate-300 bg-white px-2 text-sm font-normal normal-case text-slate-950"
+            >
+              {EXECUTOR_BACKENDS.map((backend) => (
+                <option key={backend} value={backend}>
+                  {compactText(backend)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </div>
+      <div className="mt-3 border border-slate-200 bg-slate-50 p-3">
+        <p className="text-xs font-semibold uppercase text-slate-500">
+          Agent Orchestrator
+        </p>
+        <p className="mt-1 text-xs leading-5 text-slate-500">
+          Optional external AO handoff for linked GitHub issues with the ao-ready
+          label. Config paths must stay inside the project repository.
+        </p>
+        <label className="mt-3 flex min-h-9 items-center gap-2 text-xs font-semibold uppercase text-slate-700">
+          <input
+            type="checkbox"
+            checked={form.engineSettings.agentOrchestrator?.enabled ?? false}
+            onChange={(event) =>
+              onChange("engineSettings", {
+                ...form.engineSettings,
+                agentOrchestrator: {
+                  ...form.engineSettings.agentOrchestrator,
+                  enabled: event.target.checked,
+                },
+              })
+            }
+            className="h-4 w-4 shrink-0 accent-slate-900"
+          />
+          Enable Agent Orchestrator
+        </label>
+        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+            AO Config Path
+            <input
+              value={form.engineSettings.agentOrchestrator?.configPath ?? ""}
+              onChange={(event) =>
+                onChange("engineSettings", {
+                  ...form.engineSettings,
+                  agentOrchestrator: {
+                    ...form.engineSettings.agentOrchestrator,
+                    configPath: event.target.value,
+                  },
+                })
+              }
+              placeholder="agent-orchestrator.yaml"
+              className="min-h-9 border border-slate-300 bg-white px-2 font-mono text-sm font-normal normal-case text-slate-950"
+            />
+          </label>
+          <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+            AO Project ID
+            <input
+              value={form.engineSettings.agentOrchestrator?.projectId ?? ""}
+              onChange={(event) =>
+                onChange("engineSettings", {
+                  ...form.engineSettings,
+                  agentOrchestrator: {
+                    ...form.engineSettings.agentOrchestrator,
+                    projectId: event.target.value,
+                  },
+                })
+              }
+              placeholder="loop-control-plane"
+              className="min-h-9 border border-slate-300 bg-white px-2 font-mono text-sm font-normal normal-case text-slate-950"
+            />
+          </label>
+          <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500 md:col-span-2 xl:col-span-1">
+            AO Dashboard URL
+            <input
+              value={form.engineSettings.agentOrchestrator?.dashboardUrl ?? ""}
+              onChange={(event) =>
+                onChange("engineSettings", {
+                  ...form.engineSettings,
+                  agentOrchestrator: {
+                    ...form.engineSettings.agentOrchestrator,
+                    dashboardUrl: event.target.value,
+                  },
+                })
+              }
+              placeholder="http://localhost:3000"
+              className="min-h-9 border border-slate-300 bg-white px-2 font-mono text-sm font-normal normal-case text-slate-950"
+            />
+          </label>
         </div>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
@@ -2758,6 +2931,9 @@ export default function Home() {
   const [isImportPreviewLoading, setIsImportPreviewLoading] = useState(false);
   const [isImportingSpecKitTasks, setIsImportingSpecKitTasks] = useState(false);
   const [engineStatus, setEngineStatus] = useState<EngineStatusResponse | null>(null);
+  const [backendAvailability, setBackendAvailability] =
+    useState<BackendAvailabilityResponse | null>(null);
+  const [isLoadingBackendAvailability, setIsLoadingBackendAvailability] = useState(false);
   const [engineError, setEngineError] = useState("");
   const [engineMessage, setEngineMessage] = useState("");
   const [engineAction, setEngineAction] = useState("");
@@ -3073,6 +3249,35 @@ export default function Home() {
     [],
   );
 
+  const loadBackendAvailability = useCallback(
+    async (projectId?: string, options: { silent?: boolean } = {}) => {
+      if (!projectId) {
+        setBackendAvailability(null);
+        return;
+      }
+
+      if (!options.silent) {
+        setIsLoadingBackendAvailability(true);
+      }
+
+      try {
+        const availability = await fetchBackendAvailability(projectId);
+        setBackendAvailability(availability);
+      } catch (error) {
+        setEngineError(
+          error instanceof LoopBoardApiError
+            ? error.message
+            : "Loop Control Plane could not load backend availability.",
+        );
+      } finally {
+        if (!options.silent) {
+          setIsLoadingBackendAvailability(false);
+        }
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     const storedProjectId = window.localStorage.getItem(SELECTED_PROJECT_STORAGE_KEY);
     const storedBoardQuickFilter = window.localStorage.getItem(
@@ -3170,17 +3375,19 @@ export default function Home() {
   useEffect(() => {
     if (!selectedProject?.id) {
       setEngineStatus(null);
+      setBackendAvailability(null);
       return;
     }
 
     void loadEngineStatus(selectedProject.id, { silent: true });
+    void loadBackendAvailability(selectedProject.id, { silent: true });
 
     const interval = window.setInterval(() => {
       void loadEngineStatus(selectedProject.id, { silent: true });
     }, 3_000);
 
     return () => window.clearInterval(interval);
-  }, [loadEngineStatus, selectedProject?.id]);
+  }, [loadBackendAvailability, loadEngineStatus, selectedProject?.id]);
 
   function selectTask(taskId: string) {
     setSelectedTaskId(taskId);
@@ -4498,6 +4705,8 @@ export default function Home() {
           <LoopEnginePanel
             project={selectedProject}
             engineStatus={engineStatus}
+            backendAvailability={backendAvailability}
+            isLoadingBackendAvailability={isLoadingBackendAvailability}
             isLoading={isLoadingEngineStatus}
             engineAction={engineAction}
             engineError={engineError}
@@ -4508,7 +4717,10 @@ export default function Home() {
             onTickOnce={() => void tickEngineOnce()}
             onStartScheduler={() => void startEngineSchedulerAction()}
             onStopScheduler={() => void stopEngineSchedulerAction()}
-            onRefresh={() => void loadEngineStatus(selectedProject?.id)}
+            onRefresh={() => {
+              void loadEngineStatus(selectedProject?.id);
+              void loadBackendAvailability(selectedProject?.id);
+            }}
           />
           {projectMode !== "idle" ? (
             <ProjectForm
@@ -4984,6 +5196,18 @@ export default function Home() {
                     />
                     <span className="min-w-0 truncate">Run with Engine</span>
                   </button>
+                  {selectedProject?.engineSettings.agentOrchestrator?.dashboardUrl ? (
+                    <a
+                      href={selectedProject.engineSettings.agentOrchestrator.dashboardUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-sky-800 hover:border-sky-300 hover:bg-sky-50"
+                      data-testid="open-ao-dashboard-link"
+                    >
+                      <ExternalLink className="h-4 w-4 shrink-0" />
+                      <span className="min-w-0 truncate">Open AO Dashboard</span>
+                    </a>
+                  ) : null}
                   {taskLoopPickupPolicy && taskLoopPickupPolicy.kind !== "allow" ? (
                     <p className="text-xs leading-5 text-amber-800">
                       {taskLoopPickupPolicy.message}

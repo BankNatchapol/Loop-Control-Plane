@@ -19,6 +19,7 @@ import {
   AlertTriangle,
   Check,
   Download,
+  ExternalLink,
   GitBranch,
   Plus,
   RefreshCw,
@@ -80,6 +81,8 @@ import {
 } from "@/lib/workflows/workflow-editor";
 import {
   applyExecutorEditorPatch,
+  executorBackendSupportsFanOut,
+  executorBackendSupportsModel,
   extractEngineJobIdFromWorkflowStep,
   readExecutorEditorState,
   workflowExecutorBackendOptions,
@@ -855,6 +858,9 @@ export function WorkflowEditor({
       backend?: ExecutorBackend;
       argsText?: string;
       timeoutMs?: string;
+      model?: string;
+      fanOutMaxConcurrency?: string;
+      fanOutIssueIdsText?: string;
     },
   ) => {
     if (!selectedNode) {
@@ -1484,6 +1490,63 @@ export function WorkflowEditor({
                         className="min-h-9 border border-slate-300 bg-white px-2 text-sm font-normal normal-case text-slate-950"
                       />
                     </label>
+                    {executorBackendSupportsModel(selectedNodeExecutor.backend) ? (
+                      <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+                        Model (optional)
+                        <input
+                          aria-label="Executor model"
+                          value={selectedNodeExecutor.model}
+                          onChange={(event) =>
+                            updateSelectedNodeExecutor({ model: event.target.value })
+                          }
+                          placeholder="e.g. composer-2.5-fast"
+                          className="min-h-9 border border-slate-300 bg-white px-2 font-mono text-sm font-normal normal-case text-slate-950"
+                        />
+                      </label>
+                    ) : null}
+                    {executorBackendSupportsFanOut(selectedNodeExecutor.backend) ? (
+                      <>
+                        <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+                          AO Fan-out Concurrency
+                          <input
+                            aria-label="Agent Orchestrator fan-out max concurrency"
+                            type="number"
+                            min={1}
+                            value={selectedNodeExecutor.fanOutMaxConcurrency}
+                            onChange={(event) =>
+                              updateSelectedNodeExecutor({
+                                fanOutMaxConcurrency: event.target.value,
+                              })
+                            }
+                            placeholder="3"
+                            className="min-h-9 border border-slate-300 bg-white px-2 text-sm font-normal normal-case text-slate-950"
+                          />
+                        </label>
+                        <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+                          AO Fan-out Issue IDs
+                          <input
+                            aria-label="Agent Orchestrator fan-out issue ids"
+                            value={selectedNodeExecutor.fanOutIssueIdsText}
+                            onChange={(event) =>
+                              updateSelectedNodeExecutor({
+                                fanOutIssueIdsText: event.target.value,
+                              })
+                            }
+                            placeholder="101, 102, 103"
+                            className="min-h-9 border border-slate-300 bg-white px-2 font-mono text-sm font-normal normal-case text-slate-950"
+                          />
+                        </label>
+                      </>
+                    ) : null}
+                    <a
+                      href="/docs/architecture/loop-execution-engine.md"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold uppercase text-sky-700 hover:text-sky-900"
+                    >
+                      <ExternalLink className="h-3 w-3 shrink-0" />
+                      Loop execution engine docs
+                    </a>
                   </div>
                 ) : null}
                 <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">

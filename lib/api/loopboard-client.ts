@@ -32,6 +32,7 @@ import type {
   WorkflowFileImportResult,
   WorkflowFileValidationError,
 } from "@/lib/workflows/workflow-files";
+import type { BackendAvailabilityResponse } from "@/lib/api/backend-availability-actions";
 import type {
   EngineDemoJobResponse,
   EngineJobSummary,
@@ -379,6 +380,19 @@ export const fetchEngineStatus = async (
   const response = await fetch(`/api/engine/status${params}`, { cache: "no-store" });
 
   return readApiResponse<EngineStatusResponse>(response);
+};
+
+export type { BackendAvailabilityResponse };
+
+export const fetchBackendAvailability = async (
+  projectId?: string,
+): Promise<BackendAvailabilityResponse> => {
+  const params = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+  const response = await fetch(`/api/engine/backends/availability${params}`, {
+    cache: "no-store",
+  });
+
+  return readApiResponse<BackendAvailabilityResponse>(response);
 };
 
 export const startEngineScheduler = async (): Promise<EngineSchedulerActionResponse> =>

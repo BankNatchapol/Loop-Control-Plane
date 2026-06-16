@@ -27,6 +27,9 @@ export type ExecutorEditorState = {
   backend: ExecutorBackend;
   argsText: string;
   timeoutMs: string;
+  model: string;
+  fanOutMaxConcurrency: string;
+  fanOutIssueIdsText: string;
   defaultBackend: ExecutorBackend;
 };
 
@@ -38,6 +41,17 @@ export const parseExecutorArgs = (value: string): string[] =>
     .split(",")
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
+
+export const formatFanOutIssueIds = (issueIds?: number[]): string =>
+  (issueIds ?? []).join(", ");
+
+export const parseFanOutIssueIds = (value: string): number[] =>
+  value
+    .split(/[,\s]+/u)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map((entry) => Number.parseInt(entry, 10))
+    .filter((entry) => Number.isInteger(entry) && entry > 0);
 
 export const readExecutorEditorState = (
   node: Pick<WorkflowNode, "type" | "config">,
@@ -51,6 +65,12 @@ export const readExecutorEditorState = (
     argsText: formatExecutorArgs(executor.args),
     timeoutMs:
       executor.timeoutMs !== undefined ? String(executor.timeoutMs) : "",
+    model: executor.model ?? "",
+    fanOutMaxConcurrency:
+      executor.fanOut?.maxConcurrency !== undefined
+        ? String(executor.fanOut.maxConcurrency)
+        : "",
+    fanOutIssueIdsText: formatFanOutIssueIds(executor.fanOut?.issueIds),
     defaultBackend: mapping?.defaultBackend ?? "stub",
   };
 };
@@ -61,6 +81,9 @@ export const applyExecutorEditorPatch = (
     backend?: ExecutorBackend;
     argsText?: string;
     timeoutMs?: string;
+    model?: string;
+    fanOutMaxConcurrency?: string;
+    fanOutIssueIdsText?: string;
   },
 ): Record<string, unknown> => {
   const current = resolveWorkflowNodeExecutorConfig(node);
@@ -78,7 +101,40 @@ export const applyExecutorEditorPatch = (
               : Math.max(1, Number.parseInt(patch.timeoutMs, 10) || 0),
         }
       : {}),
+    ...(patch.model !== undefined
+      ? {
+          model: patch.model.trim().length === 0 ? undefined : patch.model.trim(),
+        }
+      : {}),
   };
+
+  if (
+    patch.fanOutMaxConcurrency !== undefined ||
+    patch.fanOutIssueIdsText !== undefined
+  ) {
+    const maxConcurrencyText =
+      patch.fanOutMaxConcurrency ?? String(current.fanOut?.maxConcurrency ?? "");
+    const issueIdsText =
+      patch.fanOutIssueIdsText ?? formatFanOutIssueIds(current.fanOut?.issueIds);
+    const maxConcurrency = Number.parseInt(maxConcurrencyText.trim(), 10);
+    const issueIds = parseFanOutIssueIds(issueIdsText);
+
+    if (
+      maxConcurrencyText.trim().length === 0 &&
+      issueIdsText.trim().length === 0
+    ) {
+      next.fanOut = undefined;
+    } else if (
+      Number.isInteger(maxConcurrency) &&
+      maxConcurrency > 0 &&
+      issueIds.length > 0
+    ) {
+      next.fanOut = {
+        maxConcurrency,
+        issueIds,
+      };
+    }
+  }
 
   return withExecutorConfig(node.config, next);
 };
@@ -117,3 +173,9 @@ export const extractEngineJobIdFromWorkflowStep = (
 
   return undefined;
 };
+
+export const executorBackendSupportsModel = (backend: ExecutorBackend): boolean =>
+  backend === "cursor" || backend === "claude-code" || backend === "codex";
+
+export const executorBackendSupportsFanOut = (backend: ExecutorBackend): boolean =>
+  backend === "agent-orchestrator";

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, it } from "node:test";
 
+import { GET as getBackendAvailability } from "@/app/api/engine/backends/availability/route";
 import { POST as postDemoJob } from "@/app/api/engine/demo-job/route";
 import { POST as postTaskLoopEnqueue } from "@/app/api/engine/task-loop/enqueue/route";
 import { POST as postTaskLoopScan } from "@/app/api/engine/task-loop/scan/route";
@@ -296,6 +297,29 @@ describe("Loop engine API routes", () => {
           duplicatePayload.data.deduped[0]?.id,
           payload.data.enqueued[0]?.id,
         );
+      }
+    });
+  });
+
+  it("returns cached backend availability chips from GET /api/engine/backends/availability", async () => {
+    await withEngineApiDatabase(async () => {
+      const response = await getBackendAvailability(
+        new Request(
+          `http://localhost/api/engine/backends/availability?projectId=${encodeURIComponent(seedProject.id)}`,
+        ),
+      );
+      const payload = await readApiJson<{
+        checkedAt: string;
+        cacheTtlMs: number;
+        backends: Array<{ backend: string; label: string; available: boolean }>;
+      }>(response);
+
+      assert.equal(response.status, 200);
+      assert.equal(payload.ok, true);
+      if (payload.ok) {
+        assert.equal(payload.data.cacheTtlMs, 60_000);
+        assert.equal(payload.data.backends.length, 5);
+        assert.ok(payload.data.backends.some((entry) => entry.backend === "stub"));
       }
     });
   });
