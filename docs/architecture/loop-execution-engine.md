@@ -12,6 +12,7 @@ related:
   - '[[Workflow-Node-Executors]]'
   - '[[Spec-Kit-Importer]]'
   - '[[GitHub-Issue-Bridge]]'
+  - '[[Agent-Orchestrator-Bridge]]'
   - '[[Risk-Policy]]'
   - '[[Human-Takeover]]'
   - '[[Security-Policy]]'
@@ -33,14 +34,17 @@ flowchart LR
   Registry["ExecutorRegistry"]
   Stub["StubExecutor"]
   SQLite["SQLite engine_jobs"]
-  Future["Future CLIs\n(cursor, claude-code, codex, AO)"]
+  External["External Backends\n(cursor, claude-code, codex, AO)"]
+  Sync["EngineSyncService"]
 
   Dashboard --> API
   API --> Scheduler
   Scheduler --> SQLite
   Scheduler --> Registry
+  Scheduler --> Sync
   Registry --> Stub
-  Registry -.-> Future
+  Registry --> External
+  Sync --> External
 ```
 
 | Layer | Responsibility |
@@ -58,15 +62,15 @@ The scheduler is not a separate daemon. It runs inside the Next.js Node process 
 
 Backends are declared in `lib/engine/loop-engine-types.ts`:
 
-| Backend | Phase 01 status | Phase 03 usage |
-|---------|-----------------|----------------|
-| `stub` | **Implemented** | Default backend for demo jobs, workflow-step dispatch, and deterministic test doubles |
-| `cursor` | Reserved | Future Cursor CLI / SDK adapter |
-| `claude-code` | Reserved | Future Claude Code CLI adapter |
-| `codex` | Reserved | Future Codex CLI adapter |
-| `agent-orchestrator` | Reserved | Future Agent Orchestrator handoff |
+| Backend | Status | Usage |
+|---------|--------|-------|
+| `stub` | **Implemented** | Default in CI; demo jobs, workflow-step dispatch, deterministic test doubles |
+| `cursor` | **Implemented (Phase 04)** | Cursor CLI via audited process-runner profile |
+| `claude-code` | **Implemented (Phase 04)** | Claude Code non-interactive print mode |
+| `codex` | **Implemented (Phase 04)** | Codex CLI when installed; graceful `backend_unavailable` when missing |
+| `agent-orchestrator` | **Implemented (Phase 04)** | AO spawn/poll handoff; see [[Agent-Orchestrator-Bridge]] |
 
-Only `stub` is registered in `IMPLEMENTED_EXECUTOR_BACKENDS`. Requests for other backends return explainable errors (`executor_backend_unknown` or `executor_backend_disabled`) with human-readable reasons from `describeExecutorBackendAvailability`.
+External backends register through `ExternalBackendExecutor` and `backend-adapter-registry.ts`. Missing binaries or disabled project settings produce explainable errors (`backend_unavailable`, `executor_backend_disabled`) with human-readable reasons from availability probes and `describeAgentOrchestratorAvailability`.
 
 ### ExecutorConfig on Nodes and Task Runs
 
@@ -85,6 +89,123 @@ Per-step backend settings live in existing JSON `config`, not a new column:
 ```
 
 Helpers `readExecutorConfig`, `validateExecutorConfig`, and `withExecutorConfig` read and validate nested `config.executor`. Invalid config produces structured validation issues for the UI and API.
+
+### Backend resolution order
+
+For `task-run` and `workflow-step` jobs, `resolveExecutorConfigWithFallbacks` (`lib/engine/executor-config-resolver.ts`) picks the backend in this order:
+
+1. Explicit non-stub config on the job payload or workflow node
+2. Workflow node `config.executor.backend` when non-stub
+3. Task label `executor-backend:*`
+4. Project default — `engineSettings.defaultTaskBackend` or `defaultReviewBackend` (review actions)
+5. Global default — `stub` in CI (`LOOPBOARD_EXECUTOR_BACKEND=stub`); configurable locally via env
+
+Project defaults persist in `project.engineSettings` (migration `0009_project_engine_settings.sql`).
+
+## Agent Backends (Phase 04)
+
+Phase 04 registers real external agent adapters behind the executor registry. Heavy execution runs out-of-process via audited CLI profiles in `process-runner.ts`; the in-app scheduler tracks job state, syncs outcomes to the board, and preserves human approval gates from [[Risk-Policy]] and [[Human-Takeover]].
+
+```mermaid
+flowchart TB
+  Job["engine_jobs task-run / workflow-step"]
+  Resolver["executor-config-resolver"]
+  External["ExternalBackendExecutor"]
+  Adapters["BackendAdapter implementations"]
+  Sync["EngineSyncService"]
+
+  Job --> Resolver
+  Resolver --> External
+  External --> Adapters
+  Adapters -->|"awaitingExternalSync"| Sync
+  Sync --> Board["Kanban task + events"]
+```
+
+### Adapter contract
+
+Defined in `lib/engine/backends/backend-adapter.ts`:
+
+| Method | Purpose |
+|--------|---------|
+| `checkAvailability()` | Lightweight CLI probe (`--version` or project-scoped AO checks) |
+| `execute(context)` | Spawn external work; cwd constrained under project repo |
+| `cancel(jobId)` | Best-effort cancellation of tracked subprocess |
+| `poll?(job, context)` | Optional status poll for long-running sessions (AO) |
+
+External backends **reject** legacy `config.command` shell strings (`assertSafeBackendConfig`). All argv is fixed per process-runner profile.
+
+### Cursor, Claude Code, and Codex
+
+Implemented in `cli-backend-adapters.ts` via `createCliBackendAdapter`:
+
+| Backend | CLI profile | Prompt source |
+|---------|-------------|---------------|
+| `cursor` | `cursor` | Generated `task.md` + `context.md` paths (`ExecutorConfig.promptFile`) |
+| `claude-code` | `claude` | `TaskContextService.generateClaudeCodePrompt` |
+| `codex` | `codex` | Same path assembly as other CLI backends |
+
+Optional `ExecutorConfig.model` passes through to CLI args when supported. Exit codes and redacted stdout tails are captured in engine logs. Missing binaries return `backend_unavailable` without crashing the scheduler.
+
+### Agent Orchestrator
+
+The `agent-orchestrator` adapter wraps `ao spawn`, `ao status --json`, and optional `ao send` through the `ao` process-runner profile. Full handoff semantics, `ao-ready` contract, `gh` auth requirements, and non-goals are documented in [[Agent-Orchestrator-Bridge]].
+
+Key behaviors:
+
+- **Single-task handoff** — Linked GitHub issue + `ao-ready` label (or policy-driven `mark-ao-ready`) before spawn; see [[GitHub-Issue-Bridge]]
+- **Fan-out** — Workflow node `executor.fanOut.maxConcurrency` + `executor.fanOut.issueIds[]`; parallel spawns with dedupe by issue number
+- **Poll deferral** — Job stays `running` with `awaitingExternalSync: true`; `EngineSyncService` reconciles on scheduler ticks
+- **Untrusted results** — Summaries, branch labels, and PR URLs prefixed `[external/untrusted]` per [[Security-Policy]]
+- **Stuck jobs** — Poll timeout marks job failed and task Blocked; AO session is **not** killed by default
+
+### Extended ExecutorConfig fields
+
+Backend-specific options on `config.executor`:
+
+| Field | Type | Usage |
+|-------|------|-------|
+| `promptFile` | string | Repo-relative path to generated task prompt |
+| `issueNumber` | number | GitHub issue for AO / issue-scoped runs |
+| `branch` | string | Target branch hint |
+| `fanOut` | `{ maxConcurrency, issueIds[] }` | Parallel AO spawns on workflow nodes |
+| `aoProjectId` | string | AO yaml `projects:` key |
+| `model` | string | Optional Cursor / Claude / Codex model id |
+
+### Project engine settings
+
+`project.engineSettings` (UI: project settings form):
+
+| Field | Purpose |
+|-------|---------|
+| `defaultTaskBackend` | Fallback for task-run pickup |
+| `defaultReviewBackend` | Fallback when `taskAction: review` |
+| `agentOrchestrator.enabled` | Enable AO adapter for this project |
+| `agentOrchestrator.configPath` | Repo-relative AO yaml path (validated) |
+| `agentOrchestrator.projectId` | Default AO project key |
+| `agentOrchestrator.dashboardUrl` | Task detail **Open AO Dashboard** link |
+| `agentOrchestrator.pollIntervalMs` | External sync poll cadence |
+
+### Availability and UI
+
+`backend-availability-service.ts` probes installed CLIs and project AO config. Results are cached for 60 seconds and exposed at `GET /api/engine/backends/availability`. The Engine panel renders availability chips (`cursor: installed`, `ao: config missing`, etc.). The workflow editor shows backend-specific fields (model, fan-out concurrency) with a link back to this document.
+
+### External sync service
+
+`lib/engine/engine-sync-service.ts` runs during `LoopScheduler.tick`:
+
+1. List running jobs with `awaitingExternalSync: true`
+2. Call adapter `poll()` (AO) or honor timeout deadline
+3. On terminal status — transition task to Needs Review or Blocked; append `ENGINE_EXTERNAL_SYNC` events
+4. When AO reports `prUrl`, call `syncGitHubPullRequest` to attach PR metadata (still untrusted)
+5. On timeout — fail job, Block task, leave external session running
+
+Dashboard engine status polling (every 3s) refreshes board data when external jobs complete.
+
+### Verification
+
+All external CLI invocations are mocked in CI (`tests/backend-adapters.test.ts`, `tests/agent-orchestrator-backend.test.ts`, `tests/engine-sync-service.test.ts`). Optional local walkthrough when CLIs are installed: enqueue a Ready task with **Run with Engine** per backend and confirm board transitions; otherwise rely on mocked test suites.
+
+See [[Agent-Orchestrator-Bridge]] for AO-specific walkthrough notes and [[GitHub-Issue-Bridge]] for issue/label prerequisites.
 
 ## Job Lifecycle
 
@@ -208,7 +329,7 @@ Approval-gate nodes (`human-input`, `human-review`, `manual-claude-code-edit`, `
 
 Subprocess safety (allowlisted commands, cwd validation, timeouts, redacted logs) lives in `lib/engine/process-runner.ts`. Full node mapping, config schema, and editor UI are documented in [[Workflow-Node-Executors]].
 
-Verification: `npm run db:migrate`, `npm run lint`, `npm run typecheck`, and `npm test` (257 tests). Feature Development Loop walkthrough coverage lives in `tests/workflow-executor-verification.test.ts` (human-input → spec-kit-actions with mocked CLI → human-review → import-tasks, confirming board tasks and workflow events).
+Verification: `npm run db:migrate`, `npm run lint`, `npm run typecheck`, and `npm test`. Feature Development Loop walkthrough coverage lives in `tests/workflow-executor-verification.test.ts` (human-input → spec-kit-actions with mocked CLI → human-review → import-tasks, confirming board tasks and workflow events). External backend coverage: `tests/backend-adapters.test.ts`, `tests/agent-orchestrator-backend.test.ts`, `tests/engine-sync-service.test.ts`.
 
 ## Task Loop
 
@@ -262,8 +383,8 @@ Project automation settings expose **Allow low-risk auto task execution** (`allo
 `task-run-executor.ts` handles `task-run` jobs registered via `taskRunHandler` in `createExecutorRegistryForRepository`:
 
 1. **Pickup** — Refresh context files via `TaskContextService`; transition task to AI Running; append `ENGINE_PICKUP` and `ASSIGNED_TO_AI` events.
-2. **Backend resolution** — Payload `executorConfig` → `executor-backend:*` label → workflow node config → `stub` default (tests and safe default; `cursor` only when explicitly configured).
-3. **Invoke** — Swappable `invokeBackend` adapter (stub in Phase 02; real CLI adapters in Phase 04).
+2. **Backend resolution** — Payload `executorConfig` → task `executor-backend:*` label → workflow node config → project `engineSettings.defaultTaskBackend` → global default (`stub` in CI). See **Agent Backends (Phase 04)** and `executor-config-resolver.ts`.
+3. **Invoke** — `ExternalBackendExecutor` dispatches to registered `BackendAdapter` implementations (Cursor, Claude Code, Codex, AO, or stub).
 4. **Success** — Move to Needs Review (or Done for tasks labeled `engine-trivial`); append `ENGINE_TASK_COMPLETED`; refresh handoff with result summary.
 5. **Failure** — Retry while `attempt < maxAttempts` (task stays AI Running); otherwise Blocked with `ENGINE_TASK_FAILED` and redacted error text.
 
@@ -305,14 +426,24 @@ End-to-end coverage: `tests/task-loop-integration.test.ts` seeds a low-risk Read
 | `tests/task-loop-*.test.ts` | Planner, executor, and integration coverage |
 | `tests/workflow-engine-integration.test.ts` | Trimmed import-tasks → create-github-issues engine path |
 | `tests/workflow-executor-verification.test.ts` | Feature Development Loop walkthrough verification |
+| `lib/engine/backends/backend-adapter.ts` | External adapter contract and cwd validation |
+| `lib/engine/backends/cli-backend-adapters.ts` | Cursor, Claude Code, Codex CLI adapters |
+| `lib/engine/backends/agent-orchestrator-backend.ts` | AO spawn, fan-out, poll |
+| `lib/engine/backends/agent-orchestrator-config.ts` | AO project settings and ao-ready handoff |
+| `lib/engine/engine-sync-service.ts` | External job poll reconciliation and PR attach |
+| `lib/engine/executor-config-resolver.ts` | Backend fallback resolution order |
+| `lib/engine/backends/backend-availability-service.ts` | Cached CLI/AO availability for UI |
+| `tests/backend-adapters.test.ts` | CLI adapter success, unavailable, timeout, redaction |
+| `tests/agent-orchestrator-backend.test.ts` | AO spawn, fan-out, poll mapping |
+| `tests/engine-sync-service.test.ts` | Board sync, untrusted summaries, PR URL attach |
 
 ## Intentional Non-Goals (remaining)
 
-- **No real agent CLI backends yet** — Cursor, Claude Code, Codex, and Agent Orchestrator backends are typed and validated but adapters are Phase 04 work.
 - **No global auto-run by default** — Operators must explicitly enable automation before the scheduler runs unattended.
 - **No distributed queue** — Single-process SQLite queue; no Redis, no multi-instance coordination.
+- **No auto-merge from external backends** — AO and CLI results remain untrusted until human review; see [[Human-Takeover]] and [[Security-Policy]].
 
-Future phases will register real agent executors and extend review/implementation backends beyond the Phase 02 stub adapter. See [[Workflow-Node-Executors]] for the Phase 03 node-type mapping and config schema.
+Real agent CLI backends (Cursor, Claude Code, Codex, Agent Orchestrator) are implemented in Phase 04. See **Agent Backends (Phase 04)** and [[Agent-Orchestrator-Bridge]].
 
 ## Related Documents
 
@@ -320,6 +451,7 @@ Future phases will register real agent executors and extend review/implementatio
 - [[Workflow-Node-Executors]] — per-node executor modules, process runner, config schema
 - [[Spec-Kit-Importer]] — task import reuse for `import-tasks` workflow steps
 - [[GitHub-Issue-Bridge]] — issue and PR helpers for delivery nodes
+- [[Agent-Orchestrator-Bridge]] — AO handoff flow, ao-ready contract, fan-out, non-goals
 - [[Risk-Policy]] — global auto-run defaults and risk gates
 - [[Human-Takeover]] — ai-paused and human owner semantics for task pickup
 - [[Security-Policy]] — token handling and trusted-input rules

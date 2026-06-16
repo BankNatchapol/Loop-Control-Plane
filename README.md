@@ -1,10 +1,12 @@
 # Loop Control Plane
 
-A kanban-style control plane for AI-human collaborative software development. Loop Control Plane (LoopBoard) lets you manage tasks across AI agents and humans in one board, track feature lifecycles from PRD to deployment, and gate automation on explicit risk approval — so you stay in control while AI does the work.
+A kanban-style control plane for AI-human collaborative software development. Loop Control Plane lets you manage tasks across AI agents and humans in one board, track feature lifecycles from PRD to deployment, and gate automation on explicit risk approval — so you stay in control while AI does the work.
+
+![Loop Control Plane — dashboard overview](docs/screenshots/hero.png)
 
 ## What It Is
 
-LoopBoard is a local-first web application built on Next.js. It sits between your planning artifacts (specs, plans, task checklists) and your AI execution environment (Agent Orchestrator, Claude Code) as a structured handoff layer.
+Loop Control Plane is a local-first web application built on Next.js. It sits between your planning artifacts (specs, plans, task checklists) and your AI execution environment (Agent Orchestrator, Claude Code) as a structured handoff layer.
 
 **Core capabilities:**
 
@@ -81,6 +83,112 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+## Try It: End-to-End Walkthrough
+
+This walkthrough takes you from zero to a working board with real tasks in about 5 minutes. No GitHub token required.
+
+### Step 1 — Start with a real repository
+
+Pick any local Git repository on your machine. It doesn't matter what language or framework — Loop Control Plane just reads the path. If you don't have one handy, create an empty one:
+
+```bash
+mkdir ~/my-test-project && cd ~/my-test-project && git init
+```
+
+### Step 2 — Create your first project
+
+1. Open [http://localhost:3000](http://localhost:3000).
+2. Click **+ Add project** in the top bar.
+3. Fill in the form:
+   - **Name** — e.g. `My Test Project`
+   - **Repository Path** — the absolute path to the repo, e.g. `/Users/you/my-test-project`
+   - Leave all other fields at their defaults for now.
+4. Click **Create Project**.
+
+You'll see the project health bar appear below the top bar. It shows **Git Status** (green if the path is a real git repo), current branch, and GitHub connection. Everything else on the board is now scoped to this project.
+
+### Step 3 — Create a feature
+
+Features group related tasks under a shared lifecycle (PRD → Spec → Plan → Tasks → Done).
+
+1. Click **+ Add feature** in the feature strip (top right area).
+2. Fill in:
+   - **Name** — e.g. `User Authentication`
+   - **Summary** — one sentence describing the feature.
+   - Leave **Source** as `manual` and **Status** as `PRD Draft`.
+3. Click **Create Feature**.
+
+The feature card appears in the feature list. You'll see artifact slots (PRD.md, spec.md, plan.md, tasks.md, decisions.md) tracked but empty for now.
+
+### Step 4 — Add tasks manually
+
+1. With your feature selected, click **+ Add task** on the board.
+2. Fill in:
+   - **Title** — e.g. `Add login endpoint`
+   - **Description** — what needs to be done.
+   - **Risk** — start with `low`.
+   - **Owner** — `human` (you'll work this one yourself).
+3. Click **Create Task**.
+
+Repeat to add 2–3 more tasks. They all land in the **Backlog** column.
+
+### Step 5 — Move tasks through the board
+
+Drag a task card into **Ready**, then into **Human Working**. Click the card to open the detail panel on the right. From there you can:
+
+- Change **Owner** to `AI` to signal the task is going to an AI agent.
+- Click **Assign to AI** — the card moves to **AI Running**.
+- Click **Mark Done** when the work is complete.
+
+The detail panel also shows a full **event timeline** recording every state change.
+
+### Step 6 — Try importing tasks from a checklist
+
+This is the fastest way to populate a board from a real spec. Create a `tasks.md` file in your repo:
+
+```bash
+cat > ~/my-test-project/tasks.md << 'EOF'
+## Backend
+
+- [ ] T001 Add login route in `app/api/auth/login.ts`
+- [ ] T002 Add logout route in `app/api/auth/logout.ts`
+- [ ] T003 Write auth middleware in `lib/auth/middleware.ts`
+
+## Frontend
+
+- [ ] T004 Build login form component in `components/LoginForm.tsx`
+- [ ] T005 Add redirect on success in `app/page.tsx`
+EOF
+```
+
+Then back in the app:
+
+1. Edit your feature and set the **Artifact Folder** to the path of your repo (e.g. `/Users/you/my-test-project`).
+2. Click **Import Spec Kit Tasks** → **Preview Tasks**.
+3. Loop Control Plane parses `tasks.md` and shows all 5 tasks with inferred risk levels and area labels.
+4. Adjust any details in the preview, then click **Import**.
+
+All 5 tasks appear on the board as cards, linked back to their source lines in `tasks.md`.
+
+### Step 7 — Explore the workflow editor (optional)
+
+Click **Workflows** in the feature strip → **+ New Workflow**. The canvas opens with a React Flow editor. To try an example:
+
+1. The repo ships with a ready-made pipeline at `examples/workflows/feature-development-loop.json`. Copy it into your project's workflows folder first:
+   ```bash
+   # From the Loop Control Plane repo root
+   cp examples/workflows/feature-development-loop.json workflows/
+   ```
+2. In the workflow editor side panel, set **Import File** to `feature-development-loop.json` and click **Import JSON**.
+3. The pipeline appears: human-input → spec-kit → review → import-tasks → implement → open-PR → merge.
+4. Click **Start Run** → **Run Next Step** to step through it manually.
+
+Each node pauses when it requires human sign-off, keeping you in control of when work advances.
+
+---
+
+That's the full loop: project → feature → tasks → board → done. From here you can connect GitHub (see [Setup](#setup)) to get issue creation, PR tracking, and `ao-ready` labels wired in.
+
 ## Usage
 
 ### Projects
@@ -97,7 +205,7 @@ After saving, the project health bar shows Git status, current/default branch, G
 
 ### Features
 
-Features group related tasks under a shared artifact lifecycle. Create a feature, set its artifact folder path, and LoopBoard will track whether PRD.md, spec.md, plan.md, tasks.md, and decisions.md exist and are approved.
+Features group related tasks under a shared artifact lifecycle. Create a feature, set its artifact folder path, and Loop Control Plane will track whether PRD.md, spec.md, plan.md, tasks.md, and decisions.md exist and are approved.
 
 Use the artifact viewer to read and edit markdown artifacts directly in the browser.
 
@@ -105,7 +213,7 @@ Use the artifact viewer to read and edit markdown artifacts directly in the brow
 
 With a feature selected, click **Import Spec Kit Tasks**:
 
-1. Click **Preview Tasks** — LoopBoard reads the feature's `tasks.md` and shows parsed tasks, duplicate flags, and missing artifact notices.
+1. Click **Preview Tasks** — Loop Control Plane reads the feature's `tasks.md` and shows parsed tasks, duplicate flags, and missing artifact notices.
 2. Edit task titles, descriptions, risk levels, owners, modes, labels, dependencies, and acceptance criteria in the preview.
 3. Deselect tasks you don't want to import.
 4. Click **Import** to create the selected tasks as Kanban cards.
@@ -125,14 +233,18 @@ Drag tasks between columns, or click a task card to open the detail panel. From 
 - Create a GitHub issue, sync labels, or sync PR/CI state
 - Generate a Claude Code prompt or export task events
 
+![Kanban board with task cards and quick filters](docs/screenshots/kanban-board.png)
+
 ### GitHub AO Handoff
 
-When a task is assigned to AI, LoopBoard can mark it `ao-ready` on GitHub to signal Agent Orchestrator:
+When a task is assigned to AI, Loop Control Plane can mark it `ao-ready` on GitHub to signal Agent Orchestrator:
 
 - **Low-risk tasks** — can be marked automatically when the project policy allows it
 - **Medium/high/critical tasks** — require an explicit **Approve AO Ready** action in the UI before the label is applied
 
 The task detail panel shows the current AO handoff state and guides you through the steps.
+
+![Task detail panel with GitHub AO handoff state](docs/screenshots/task-detail.png)
 
 ### Workflow Editor
 
@@ -146,6 +258,8 @@ Node modes:
 
 Save the workflow definition to the project's configured workflows folder, or import an existing JSON definition.
 
+![Workflow editor — React Flow canvas with delivery pipeline](docs/screenshots/workflow-editor.png)
+
 ### Workflow Runner
 
 With a workflow saved, click **Start Run**. The runner advances one node at a time:
@@ -156,6 +270,10 @@ With a workflow saved, click **Start Run**. The runner advances one node at a ti
 - **Fail Step** — marks the current node and run as failed
 
 Auto nodes advance automatically. Human, semi-auto, and approval-required nodes pause the run until you approve. The runner never auto-merges, auto-deploys, or executes unreviewed shell commands.
+
+### Loop Engine
+
+The dashboard **Loop Engine** panel runs persisted engine jobs through an in-app scheduler. Use **Run Demo Job** and **Tick Once** to exercise the stub executor without enabling global auto-run. When Cursor, Claude Code, Codex, or Agent Orchestrator CLIs are installed, configure project default backends and use **Run with Engine** on eligible tasks. See `docs/architecture/loop-execution-engine.md` and `docs/architecture/agent-orchestrator-bridge.md` for architecture, backend config, and policy gates.
 
 ## Available Scripts
 
@@ -178,7 +296,7 @@ Auto nodes advance automatically. Human, semi-auto, and approval-required nodes 
 .
 ├── app/                    # Next.js App Router pages and API routes
 │   ├── api/                # REST API route handlers
-│   ├── page.tsx            # Main LoopBoard UI
+│   ├── page.tsx            # Main Loop Control Plane UI
 │   └── workflow-editor.tsx # React Flow workflow canvas
 ├── lib/                    # Core business logic
 │   ├── api/                # API client and HTTP layer
@@ -202,7 +320,7 @@ Auto nodes advance automatically. Human, semi-auto, and approval-required nodes 
 
 ## Risk Policy
 
-LoopBoard is conservative by default. No automated external actions run without explicit operator opt-in:
+Loop Control Plane is conservative by default. No automated external actions run without explicit operator opt-in:
 
 | Setting | Default | Effect |
 |---------|---------|--------|
@@ -217,7 +335,7 @@ Per-project automation policy flags can loosen low-risk gates when you're confid
 ## Security Notes
 
 - GitHub tokens are read from environment variables only and are never stored in task data, issue bodies, handoff files, prompts, or logs
-- External GitHub content (comments, review text, CI output) is treated as untrusted context — it cannot override LoopBoard task instructions
+- External GitHub content (comments, review text, CI output) is treated as untrusted context — it cannot override Loop Control Plane task instructions
 - Workflow runner logs redact token, secret, password, and API-key shaped values before persistence
 - The workflow runner does not execute arbitrary shell commands; shell-capable nodes require explicit approval
 
