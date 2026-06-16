@@ -83,6 +83,34 @@ These node types always pause for operator approval. Executors may prepare artif
 
 Authoritative mapping data: `workflowNodeExecutorMap` in `lib/engine/workflow-node-executor-map.ts`.
 
+## Process Runner
+
+Audited subprocess execution for workflow node executors lives in `lib/engine/process-runner.ts`:
+
+| Profile | Command | Default args | Notes |
+|---------|---------|--------------|-------|
+| `spec-kit` | Discovered via `--version` (`spec-kit`, `speckit`, `specify`) | `[]` | Fails with `spec_kit_unavailable` when CLI missing |
+| `npm-test` | `npm` | `["test"]` | Runs project test script in validated repo cwd |
+| `git` | `git` | `[]` | Fixed allowlist; no shell interpolation |
+| `gh` | `gh` | `[]` | GitHub CLI for PR/issue fallbacks |
+| `cursor` | `cursor` | `[]` | Placeholder profile (Phase 04 adapters) |
+| `claude` | `claude` | `[]` | Placeholder profile (Phase 04 adapters) |
+| `codex` | `codex` | `[]` | Placeholder profile (Phase 04 adapters) |
+
+Safety controls:
+
+- Fixed command allowlist — rejects binaries outside profile definitions.
+- `shell: false` spawn with argv-only args; shell metacharacters in args are rejected.
+- `cwd` validated through `validateLocalDirectory` against `projectRepoPath`.
+- Timeout enforcement (default 300s) with `timedOut` results.
+- stdout/stderr captured with 256 KiB byte limits; log summaries redacted via `redactSensitiveText`.
+- Environment built from an allowlist (`PATH`, `NODE_ENV`, `HOME`, etc.) — never full `process.env`.
+- Shell-capable workflow nodes must pass `evaluateWorkflowNodePolicy` via optional `policy` on `ProcessRunOptions`; auto mode stays blocked unless explicitly approved.
+
+Helpers: `ProcessRunner`, `runProcessProfile`, `assertProcessRunPolicyAllowed`, `discoverSpecKitBinary`, `resolveProcessProfile`.
+
+Tests: `tests/process-runner.test.ts`.
+
 ## Runner vs Engine Boundary
 
 `lib/workflows/workflow-runner.ts` remains the graph state machine. Phase 03 replaces deterministic `"completed deterministically"` completion for automatable nodes by enqueueing `workflow-step` engine jobs (later tasks in this phase). Until those jobs run:
