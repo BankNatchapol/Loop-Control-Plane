@@ -47,7 +47,7 @@ import {
   User,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   LoopBoardApiError,
@@ -64,6 +64,7 @@ import {
   fetchFeatureArtifactDocument,
   fetchTaskContextStatus,
   enqueueEngineDemoJob,
+  enqueueTaskLoop,
   fetchBoardData,
   fetchEngineStatus,
   generatePersistedTaskClaudeCodePrompt,
@@ -94,7 +95,8 @@ import {
   type TaskContextActionResult,
   type TaskOpenActionResult,
 } from "@/lib/api/loopboard-client";
-import type { EngineStatusResponse } from "@/lib/api/engine-actions";
+import type { EngineStatusResponse, EngineJobSummary } from "@/lib/api/engine-actions";
+import { isTaskStructurallyEligible } from "@/lib/engine/task-loop-planner";
 import type {
   EngineJobStatus,
   EngineSchedulerState,
@@ -105,6 +107,7 @@ import { WorkflowEditor } from "@/app/workflow-editor";
 import {
   defaultAutomationSettings,
   describeEffectiveAutomationPolicy,
+  evaluateTaskActionPolicy,
 } from "@/lib/policies/automation-policy";
 import {
   KANBAN_COLUMNS,
@@ -612,6 +615,7 @@ function BoardColumn({
   tasks,
   featuresById,
   selectedTaskId,
+  taskRunJobsByTaskId,
   onSelectTask,
 }: {
   id: KanbanStatus;
@@ -619,6 +623,7 @@ function BoardColumn({
   tasks: Task[];
   featuresById: Map<string, Feature>;
   selectedTaskId: string;
+  taskRunJobsByTaskId: Map<string, EngineJobSummary>;
   onSelectTask: (taskId: string) => void;
 }) {
   const { isOver, setNodeRef } = useDroppable({ id });
@@ -649,6 +654,7 @@ function BoardColumn({
             task={task}
             feature={featuresById.get(task.featureId)}
             selected={task.id === selectedTaskId}
+            engineJob={taskRunJobsByTaskId.get(task.id)}
             onSelectTask={onSelectTask}
           />
         ))}
@@ -666,11 +672,13 @@ function TaskCard({
   task,
   feature,
   selected,
+  engineJob,
   onSelectTask,
 }: {
   task: Task;
   feature?: Feature;
   selected: boolean;
+  engineJob?: EngineJobSummary;
   onSelectTask: (taskId: string) => void;
 }) {
   const {
@@ -709,9 +717,26 @@ function TaskCard({
           <h3 className="min-w-0 text-sm font-semibold leading-5 text-slate-950 [overflow-wrap:anywhere]">
             {task.title}
           </h3>
-          <span className={clsx("shrink-0 border px-1.5 py-0.5 text-[10px] font-semibold uppercase", riskStyle(task.risk))}>
-            {task.risk}
-          </span>
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+            {engineJob?.status === "queued" ? (
+              <span
+                className="border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-sky-800"
+                data-testid={`task-engine-badge-${task.id}`}
+              >
+                engine queued
+              </span>
+            ) : engineJob?.status === "running" ? (
+              <span
+                className="border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-indigo-800"
+                data-testid={`task-engine-badge-${task.id}`}
+              >
+                engine running
+              </span>
+            ) : null}
+            <span className={clsx("border px-1.5 py-0.5 text-[10px] font-semibold uppercase", riskStyle(task.risk))}>
+              {task.risk}
+            </span>
+          </div>
         </div>
         <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-600">
           {task.description}
@@ -2737,6 +2762,9 @@ export default function Home() {
   const [engineMessage, setEngineMessage] = useState("");
   const [engineAction, setEngineAction] = useState("");
   const [isLoadingEngineStatus, setIsLoadingEngineStatus] = useState(false);
+  const [taskLoopMessage, setTaskLoopMessage] = useState("");
+  const [taskLoopError, setTaskLoopError] = useState("");
+  const previousEngineJobStatusesRef = useRef<Map<string, EngineJobStatus>>(new Map());
   const { projects, features, tasks, latestWorkflowRuns } = boardData;
   const sensors = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor));
 
@@ -2798,6 +2826,69 @@ export default function Home() {
       }),
     [boardData.automationSettings, selectedProject?.automationPolicy],
   );
+  const taskRunJobsByTaskId = useMemo(() => {
+    const map = new Map<string, EngineJobSummary>();
+
+    for (const job of engineStatus?.recentJobs ?? []) {
+      if (job.kind !== "task-run" || !job.taskId) {
+        continue;
+      }
+
+      if (job.status !== "queued" && job.status !== "running") {
+        continue;
+      }
+
+      map.set(job.taskId, job);
+    }
+
+    return map;
+  }, [engineStatus?.recentJobs]);
+  const selectedTaskEngineJob = useMemo(() => {
+    if (!selectedTask) {
+      return undefined;
+    }
+
+    return (engineStatus?.recentJobs ?? []).find(
+      (job) => job.kind === "task-run" && job.taskId === selectedTask.id,
+    );
+  }, [engineStatus?.recentJobs, selectedTask]);
+  const taskLoopPickupPolicy = useMemo(() => {
+    if (!selectedTask || !selectedProject) {
+      return null;
+    }
+
+    if (!isTaskStructurallyEligible(selectedTask)) {
+      return {
+        kind: "deny" as const,
+        code: "task_not_structurally_eligible",
+        message: "Task is not in Ready column with an unassigned or AI owner.",
+        reasons: ["Only Ready tasks owned by AI or unassigned can run with the engine."],
+      };
+    }
+
+    if (taskRunJobsByTaskId.has(selectedTask.id)) {
+      return {
+        kind: "deny" as const,
+        code: "task_run_job_in_flight",
+        message: "Task already has a queued or running engine job.",
+        reasons: ["Wait for the current task-run job to finish before enqueueing another."],
+      };
+    }
+
+    return evaluateTaskActionPolicy({
+      action: "assign-ai",
+      task: selectedTask,
+      automated: false,
+      approved: Boolean(selectedTask.github.aoReadyApprovedAt),
+      automationSettings: boardData.automationSettings,
+      projectPolicy: selectedProject.automationPolicy,
+    });
+  }, [
+    boardData.automationSettings,
+    selectedProject,
+    selectedTask,
+    taskRunJobsByTaskId,
+  ]);
   const selectedRepoPath = selectedProject?.repoPath.trim() ?? "";
   const selectedWorktreePath =
     selectedRepoPath && selectedTask?.worktree.trim()
@@ -2819,8 +2910,10 @@ export default function Home() {
     window.localStorage.setItem(SELECTED_TASK_STORAGE_KEY, updatedTask.id);
   }, []);
 
-  const loadBoard = useCallback(async (projectId?: string) => {
-    setIsLoadingBoard(true);
+  const loadBoard = useCallback(async (projectId?: string, options: { silent?: boolean } = {}) => {
+    if (!options.silent) {
+      setIsLoadingBoard(true);
+    }
     setLoadError("");
 
     try {
@@ -2873,7 +2966,9 @@ export default function Home() {
           : "Loop Control Plane could not load persisted board data.",
       );
     } finally {
-      setIsLoadingBoard(false);
+      if (!options.silent) {
+        setIsLoadingBoard(false);
+      }
     }
   }, []);
 
@@ -3007,6 +3102,51 @@ export default function Home() {
       setContextStatus(null);
     }
   }, [loadTaskContextStatus, loadTaskHandoffDocument, selectedTask?.id]);
+
+  useEffect(() => {
+    setTaskLoopMessage("");
+    setTaskLoopError("");
+  }, [selectedTask?.id]);
+
+  useEffect(() => {
+    if (!selectedProject?.id || !engineStatus) {
+      return;
+    }
+
+    let shouldRefreshBoard = false;
+
+    for (const job of engineStatus.recentJobs) {
+      if (job.kind !== "task-run") {
+        continue;
+      }
+
+      const previousStatus = previousEngineJobStatusesRef.current.get(job.id);
+      if (
+        previousStatus &&
+        (previousStatus === "queued" || previousStatus === "running") &&
+        (job.status === "completed" ||
+          job.status === "failed" ||
+          job.status === "cancelled")
+      ) {
+        shouldRefreshBoard = true;
+      }
+
+      previousEngineJobStatusesRef.current.set(job.id, job.status);
+    }
+
+    if (shouldRefreshBoard) {
+      void loadBoard(selectedProject.id, { silent: true });
+      if (selectedTask?.id) {
+        void loadTaskContextStatus(selectedTask.id);
+      }
+    }
+  }, [
+    engineStatus,
+    loadBoard,
+    loadTaskContextStatus,
+    selectedProject?.id,
+    selectedTask?.id,
+  ]);
 
   useEffect(() => {
     if (selectedFeature?.id) {
@@ -4077,6 +4217,47 @@ export default function Home() {
     }
   }
 
+  async function handleRunTaskLoop() {
+    if (!selectedTask || !selectedProject) {
+      return;
+    }
+
+    setTaskLoopError("");
+    setTaskLoopMessage("");
+    setEngineAction("task-loop");
+
+    try {
+      const result = await enqueueTaskLoop({
+        taskId: selectedTask.id,
+        automated: false,
+      });
+
+      if (result.enqueued.length > 0) {
+        setTaskLoopMessage(
+          `Task-run job ${result.enqueued[0]!.id} queued (${result.enqueued[0]!.backend}).`,
+        );
+      } else if (result.deduped.length > 0) {
+        setTaskLoopMessage(
+          `Existing task-run job ${result.deduped[0]!.id} is already in flight.`,
+        );
+      } else if (result.skipped.length > 0) {
+        setTaskLoopError(result.skipped[0]!.message);
+      } else if (result.policy.kind !== "allow") {
+        setTaskLoopError(result.policy.message);
+      }
+
+      await loadEngineStatus(selectedProject.id, { silent: true });
+    } catch (error) {
+      setTaskLoopError(
+        error instanceof LoopBoardApiError
+          ? error.message
+          : "Loop Control Plane could not enqueue the task-run job.",
+      );
+    } finally {
+      setEngineAction("");
+    }
+  }
+
   function reloadBoard() {
     void loadBoard(selectedProject?.id);
   }
@@ -4458,6 +4639,7 @@ export default function Home() {
                     tasks={groupedTasks[column.id]}
                     featuresById={featuresById}
                     selectedTaskId={selectedTask?.id ?? ""}
+                    taskRunJobsByTaskId={taskRunJobsByTaskId}
                     onSelectTask={selectTask}
                   />
                 ))}
@@ -4736,6 +4918,82 @@ export default function Home() {
                         relevant instruction into Loop Control Plane notes.
                       </p>
                     </div>
+                  ) : null}
+                </div>
+              </section>
+
+              <section className="mt-5" data-testid="task-engine-status">
+                <h3 className="text-xs font-semibold uppercase text-slate-500">
+                  Engine Status
+                </h3>
+                <div className="mt-2 grid gap-2 border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+                  {selectedTaskEngineJob ? (
+                    <>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={clsx(
+                            "inline-flex border px-1.5 py-0.5 text-[10px] font-semibold uppercase",
+                            engineJobStatusStyles[selectedTaskEngineJob.status],
+                          )}
+                        >
+                          {compactText(selectedTaskEngineJob.status)}
+                        </span>
+                        <MetaPill icon={Bot} text={selectedTaskEngineJob.backend} />
+                        <MetaPill
+                          icon={Hash}
+                          text={`attempt ${selectedTaskEngineJob.attempt}/${selectedTaskEngineJob.maxAttempts}`}
+                        />
+                      </div>
+                      <MetaLine icon={Hash} text={selectedTaskEngineJob.id} />
+                      <p className="text-xs leading-5 text-slate-600">
+                        {selectedTaskEngineJob.lastLogMessage ??
+                          `${selectedTaskEngineJob.logCount} log entries`}
+                      </p>
+                      {selectedTaskEngineJob.error ? (
+                        <p className="text-xs leading-5 text-red-700">
+                          {selectedTaskEngineJob.error}
+                        </p>
+                      ) : null}
+                    </>
+                  ) : (
+                    <p className="text-xs leading-5 text-slate-500">
+                      No task-run engine job recorded for this task yet.
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void handleRunTaskLoop()}
+                    disabled={
+                      engineAction.length > 0 ||
+                      taskLoopPickupPolicy?.kind !== "allow"
+                    }
+                    title={
+                      taskLoopPickupPolicy?.kind === "allow"
+                        ? "Enqueue a manual task-run job for this task."
+                        : taskLoopPickupPolicy?.message ??
+                          "Task is not eligible for engine pickup."
+                    }
+                    className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    data-testid="run-task-loop-button"
+                  >
+                    <Play
+                      className={clsx(
+                        "h-4 w-4 shrink-0",
+                        engineAction === "task-loop" && "animate-pulse",
+                      )}
+                    />
+                    <span className="min-w-0 truncate">Run with Engine</span>
+                  </button>
+                  {taskLoopPickupPolicy && taskLoopPickupPolicy.kind !== "allow" ? (
+                    <p className="text-xs leading-5 text-amber-800">
+                      {taskLoopPickupPolicy.message}
+                    </p>
+                  ) : null}
+                  {taskLoopError ? (
+                    <p className="text-xs leading-5 text-red-700">{taskLoopError}</p>
+                  ) : null}
+                  {taskLoopMessage ? (
+                    <p className="text-xs leading-5 text-emerald-800">{taskLoopMessage}</p>
                   ) : null}
                 </div>
               </section>

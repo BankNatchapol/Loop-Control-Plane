@@ -34,11 +34,16 @@ import type {
 } from "@/lib/workflows/workflow-files";
 import type {
   EngineDemoJobResponse,
+  EngineJobSummary,
   EngineSchedulerActionResponse,
   EngineStatusResponse,
   EngineTickResponse,
 } from "@/lib/api/engine-actions";
-import type { AutomationSettings } from "@/lib/policies/automation-policy";
+import type {
+  TaskLoopEnqueueResponse,
+  TaskLoopScanResponse,
+} from "@/lib/api/task-loop-actions";
+import type { AutomationSettings, PolicyDecision } from "@/lib/policies/automation-policy";
 import type { WorkflowRunAction } from "@/lib/workflows/workflow-runner";
 
 type ApiSuccess<T> = {
@@ -393,6 +398,21 @@ export const enqueueEngineDemoJob = async (
   projectId: string,
 ): Promise<EngineDemoJobResponse> =>
   writeJson<EngineDemoJobResponse>("/api/engine/demo-job", { projectId });
+
+export type { EngineJobSummary, PolicyDecision, TaskLoopEnqueueResponse, TaskLoopScanResponse };
+
+export const scanTaskLoop = async (input: {
+  projectId?: string;
+  taskId?: string;
+  automated?: boolean;
+} = {}): Promise<TaskLoopScanResponse> =>
+  writeJson<TaskLoopScanResponse>("/api/engine/task-loop/scan", input);
+
+export const enqueueTaskLoop = async (input: {
+  taskId: string;
+  automated?: boolean;
+}): Promise<TaskLoopEnqueueResponse> =>
+  writeJson<TaskLoopEnqueueResponse>("/api/engine/task-loop/enqueue", input);
 
 export const updateAutomationSettings = async (
   input: Partial<AutomationSettings>,
