@@ -217,6 +217,47 @@ describe("CLI backend adapters", () => {
     }
   });
 
+  it("reports backend_timeout when mocked process runner times out", async () => {
+    const tempDirectory = mkdtempSync(join(tmpdir(), "backend-adapters-timeout-"));
+    const contextRoot = join(tempDirectory, "contexts");
+    const taskDirectory = join(contextRoot, "task-1");
+    mkdirSync(taskDirectory, { recursive: true });
+    writeFileSync(join(taskDirectory, "task.md"), "# Timed out task\n");
+    writeFileSync(join(taskDirectory, "context.md"), "Context.");
+
+    const runner = new ProcessRunner(async () => ({
+      exitCode: null,
+      stdout: "",
+      stderr: "",
+      timedOut: true,
+    }));
+
+    const adapter = createCursorBackendAdapter({
+      contextService: new TaskContextService(contextRoot),
+      processRunner: runner,
+      availabilityCheck: async () => ({
+        backend: "cursor",
+        available: true,
+        message: "cursor available (mocked).",
+      }),
+    });
+
+    try {
+      const result = await adapter.execute(
+        buildBackendExecutionContext({
+          job: sampleJob(),
+          config: { backend: "cursor", timeoutMs: 1_000 },
+          projectRepoPath: tempDirectory,
+        }),
+      );
+
+      assert.equal(result.success, false);
+      assert.equal(result.errorCode, "backend_timeout");
+    } finally {
+      rmSync(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
   it("reports CLI spawn failures from mocked process runner", async () => {
     const adapter = createCodexBackendAdapter({
       processRunner: new ProcessRunner(missingBinarySpawner),
