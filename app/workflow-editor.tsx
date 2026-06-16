@@ -64,6 +64,7 @@ import {
   describeEffectiveAutomationPolicy,
   type AutomationSettings,
 } from "@/lib/policies/automation-policy";
+import { extractWorkflowRunPauseReason } from "@/lib/engine/auto-advance";
 import type {
   WorkflowFileImportResult,
   WorkflowFileValidationError,
@@ -285,6 +286,13 @@ export function WorkflowEditor({
         projectPolicy: project?.automationPolicy,
       }),
     [automationSettings, project?.automationPolicy],
+  );
+  const workflowPauseReason = useMemo(
+    () =>
+      currentRun
+        ? extractWorkflowRunPauseReason(currentRun, draftWorkflow ?? undefined)
+        : undefined,
+    [currentRun, draftWorkflow],
   );
 
   useEffect(() => {
@@ -1172,9 +1180,13 @@ export function WorkflowEditor({
                         : currentRun.featureId}
                     </p>
                   ) : null}
-                  {currentRun.status === "paused" ? (
-                    <p className="border border-amber-200 bg-amber-50 p-2 text-xs font-semibold leading-5 text-amber-800">
-                      Paused — click Approve to advance
+                  {currentRun.status === "paused" || workflowPauseReason ? (
+                    <p
+                      className="border border-amber-200 bg-amber-50 p-2 text-xs font-semibold leading-5 text-amber-800"
+                      data-testid="workflow-pause-reason"
+                    >
+                      {workflowPauseReason?.message ??
+                        "Paused — click Approve to advance"}
                     </p>
                   ) : null}
                   <div className="grid grid-cols-2 gap-2">

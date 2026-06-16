@@ -831,6 +831,10 @@ const normalizeProjectEngineSettings = (
     settings.defaultReviewBackend = input.defaultReviewBackend;
   }
 
+  if (typeof input.autoAdvanceEnabled === "boolean") {
+    settings.autoAdvanceEnabled = input.autoAdvanceEnabled;
+  }
+
   if (input.agentOrchestrator && typeof input.agentOrchestrator === "object") {
     const ao = input.agentOrchestrator;
     settings.agentOrchestrator = {

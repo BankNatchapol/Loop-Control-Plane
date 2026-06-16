@@ -30,6 +30,10 @@ import {
   completeWorkflowStepFromEngineJob,
 } from "@/lib/workflows/workflow-runner";
 import { enqueueTaskLoopJobs } from "@/lib/engine/task-loop-planner";
+import {
+  maybeFollowUpAfterCompletedJob,
+  type AutoAdvanceResult,
+} from "@/lib/engine/auto-advance";
 
 export type SchedulerAction = "start" | "stop" | "pause";
 
@@ -64,6 +68,8 @@ export type TickResult = {
     deduped: number;
   };
   engineSync?: EngineSyncResult;
+  autoAdvance?: AutoAdvanceResult;
+  chainedTicks?: number;
 };
 
 export class LoopSchedulerError extends Error {
@@ -80,6 +86,7 @@ export class LoopSchedulerError extends Error {
 const nowIso = (): string => new Date().toISOString();
 
 export const DEFAULT_TASK_LOOP_CONCURRENCY_LIMIT = 1;
+export const DEFAULT_AUTO_ADVANCE_CHAIN_LIMIT = 25;
 
 export type TaskLoopPickupPlan = {
   shouldEnqueue: boolean;
@@ -423,103 +430,158 @@ export class LoopScheduler {
       };
     }
 
-    const nextJob = this.repository.fetchNextQueuedJob();
-    const plan = planNextTick({
-      schedulerStatus,
-      policyDecision: policy,
-      nextJob,
-      tickMode: mode,
-    });
+    let lastResult: TickResult | undefined;
+    let chainedTicks = 0;
+    let tickCount = schedulerStatus.tickCount;
 
-    const tickCount = schedulerStatus.tickCount + 1;
+    while (chainedTicks < DEFAULT_AUTO_ADVANCE_CHAIN_LIMIT) {
+      tickCount += 1;
+      const nextJob = this.repository.fetchNextQueuedJob();
+      const currentSchedulerStatus =
+        chainedTicks === 0
+          ? schedulerStatus
+          : this.repository.getEngineSchedulerStatus();
+      const plan = planNextTick({
+        schedulerStatus: currentSchedulerStatus,
+        policyDecision: policy,
+        nextJob,
+        tickMode: mode,
+      });
 
-    if (plan.action !== "process") {
-      const updated = this.repository.updateEngineSchedulerStatus({
+      if (plan.action !== "process") {
+        const updated = this.repository.updateEngineSchedulerStatus({
+          lastTickAt: now,
+          tickCount,
+          lastError: plan.action === "skip" ? plan.reason : null,
+        });
+
+        lastResult = {
+          plan,
+          schedulerStatus: updated,
+          taskLoopPickup,
+          engineSync,
+          chainedTicks,
+        };
+        break;
+      }
+
+      const running = this.repository.updateEngineJob(plan.jobId, {
+        status: "running",
+        startedAt: now,
+      });
+
+      running.executionLogs = [
+        ...running.executionLogs,
+        engineLogEntry("info", "Engine scheduler dequeued job for execution.", {
+          jobId: running.id,
+          attempt: running.attempt,
+          mode,
+        }, now),
+      ];
+      this.repository.updateEngineJob(running.id, {
+        executionLogs: running.executionLogs,
+      });
+
+      let executorResult: ExecutorResult;
+      try {
+        executorResult = await this.registry.executeJob(
+          running,
+          resolveExecutorConfigForJob(running),
+        );
+      } catch (error) {
+        executorResult = {
+          success: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Executor failed unexpectedly.",
+          logs: [],
+        };
+      }
+
+      const outcome = processEngineJob({
+        job: running,
+        executorResult,
+        startedAt: now,
+        now,
+      });
+
+      const job = this.repository.updateEngineJob(running.id, {
+        status: outcome.status,
+        attempt: outcome.attempt,
+        result: outcome.result ?? null,
+        error: outcome.error ?? null,
+        executionLogs: outcome.executionLogs,
+        startedAt: outcome.startedAt ?? null,
+        completedAt: outcome.completedAt ?? null,
+        updatedAt: now,
+      });
+
+      if (
+        job.kind === "workflow-step" &&
+        (outcome.status === "completed" || outcome.status === "failed")
+      ) {
+        completeWorkflowStepFromEngineJob({
+          repository: this.repository,
+          job,
+          success: outcome.status === "completed",
+          error: outcome.error,
+        });
+      }
+
+      const schedulerStatusAfterTick = this.repository.updateEngineSchedulerStatus({
         lastTickAt: now,
         tickCount,
-        lastError: plan.action === "skip" ? plan.reason : null,
+        lastError: outcome.status === "failed" ? outcome.error ?? null : null,
       });
 
-      return { plan, schedulerStatus: updated, taskLoopPickup, engineSync };
-    }
+      const jobFinished =
+        outcome.status === "completed" || outcome.status === "failed";
+      const autoAdvance =
+        jobFinished && job.status !== "queued"
+          ? maybeFollowUpAfterCompletedJob(this.repository, job, {
+              tickMode: mode,
+              success: outcome.status === "completed",
+            })
+          : undefined;
 
-    const running = this.repository.updateEngineJob(plan.jobId, {
-      status: "running",
-      startedAt: now,
-    });
-
-    running.executionLogs = [
-      ...running.executionLogs,
-      engineLogEntry("info", "Engine scheduler dequeued job for execution.", {
-        jobId: running.id,
-        attempt: running.attempt,
-        mode,
-      }, now),
-    ];
-    this.repository.updateEngineJob(running.id, {
-      executionLogs: running.executionLogs,
-    });
-
-    let executorResult: ExecutorResult;
-    try {
-      executorResult = await this.registry.executeJob(
-        running,
-        resolveExecutorConfigForJob(running),
-      );
-    } catch (error) {
-      executorResult = {
-        success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Executor failed unexpectedly.",
-        logs: [],
-      };
-    }
-
-    const outcome = processEngineJob({
-      job: running,
-      executorResult,
-      startedAt: now,
-      now,
-    });
-
-    const job = this.repository.updateEngineJob(running.id, {
-      status: outcome.status,
-      attempt: outcome.attempt,
-      result: outcome.result ?? null,
-      error: outcome.error ?? null,
-      executionLogs: outcome.executionLogs,
-      startedAt: outcome.startedAt ?? null,
-      completedAt: outcome.completedAt ?? null,
-      updatedAt: now,
-    });
-
-    if (
-      job.kind === "workflow-step" &&
-      (outcome.status === "completed" || outcome.status === "failed")
-    ) {
-      completeWorkflowStepFromEngineJob({
-        repository: this.repository,
+      lastResult = {
+        plan,
         job,
-        success: outcome.status === "completed",
-        error: outcome.error,
-      });
+        schedulerStatus: schedulerStatusAfterTick,
+        taskLoopPickup,
+        engineSync,
+        autoAdvance,
+        chainedTicks,
+      };
+
+      const shouldChain =
+        autoAdvance?.action === "advanced" &&
+        autoAdvance.enqueuedJob === true &&
+        this.repository.fetchNextQueuedJob() !== undefined;
+
+      if (!shouldChain) {
+        break;
+      }
+
+      chainedTicks += 1;
     }
 
-    const schedulerStatusAfterTick = this.repository.updateEngineSchedulerStatus({
-      lastTickAt: now,
-      tickCount,
-      lastError: outcome.status === "failed" ? outcome.error ?? null : null,
-    });
-
-    return {
-      plan,
-      job,
-      schedulerStatus: schedulerStatusAfterTick,
-      taskLoopPickup,
-      engineSync,
-    };
+    return (
+      lastResult ?? {
+        plan: {
+          action: "idle",
+          reason: "No queued engine jobs are waiting for execution.",
+        },
+        schedulerStatus: this.repository.updateEngineSchedulerStatus({
+          lastTickAt: now,
+          tickCount: schedulerStatus.tickCount + 1,
+        }),
+        taskLoopPickup,
+        engineSync,
+        chainedTicks: 0,
+      }
+    );
   }
 }
 

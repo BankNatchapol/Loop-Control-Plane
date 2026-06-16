@@ -21,6 +21,11 @@ import {
   describeEffectiveAutomationPolicy,
   type PolicyDecision,
 } from "@/lib/policies/automation-policy";
+import {
+  extractWorkflowRunPauseReason,
+  isProjectAutoAdvanceEnabled,
+  type AutoAdvanceStopReason,
+} from "@/lib/engine/auto-advance";
 import { redactSensitiveText } from "@/lib/security/safe-context";
 
 const ENGINE_JOB_STATUSES: EngineJobStatus[] = [
@@ -52,11 +57,20 @@ export type EngineJobSummary = {
 
 export type EngineQueueCounts = Record<EngineJobStatus, number>;
 
+export type EngineAutoAdvanceStatus = {
+  projectEnabled: boolean;
+  globallyEnabled: boolean;
+  active: boolean;
+  pauseReason?: AutoAdvanceStopReason;
+  workflowRunId?: string;
+};
+
 export type EngineStatusResponse = {
   scheduler: EngineSchedulerStatus;
   queueCounts: EngineQueueCounts;
   recentJobs: EngineJobSummary[];
   automationPolicy: PolicyDecision;
+  autoAdvance?: EngineAutoAdvanceStatus;
 };
 
 export type EngineSchedulerActionResponse = {
@@ -133,14 +147,39 @@ export const getEngineStatus = (
   const recentJobs = repository
     .listEngineJobs({ projectId, limit: 10 })
     .map(summarizeEngineJob);
+  const automationSettings = repository.getAutomationSettings();
+
+  let autoAdvance: EngineAutoAdvanceStatus | undefined;
+  if (projectId) {
+    const project = repository.getProject(projectId);
+    const latestRun = repository.getLatestWorkflowRunForProject(projectId);
+    const projectEnabled = project.engineSettings.autoAdvanceEnabled === true;
+    const globallyEnabled = automationSettings.globalAutoRunEnabled;
+    const pauseReason = latestRun
+      ? extractWorkflowRunPauseReason(
+          latestRun,
+          latestRun.workflowId
+            ? repository.getWorkflow(latestRun.workflowId)
+            : undefined,
+        )
+      : undefined;
+
+    autoAdvance = {
+      projectEnabled,
+      globallyEnabled,
+      active: isProjectAutoAdvanceEnabled(project, automationSettings),
+      ...(pauseReason ? { pauseReason, workflowRunId: latestRun?.id } : {}),
+    };
+  }
 
   return {
     scheduler: repository.getEngineSchedulerStatus(),
     queueCounts: buildEngineQueueCounts(jobsForCounts),
     recentJobs,
     automationPolicy: describeEffectiveAutomationPolicy({
-      automationSettings: repository.getAutomationSettings(),
+      automationSettings,
     }),
+    autoAdvance,
   };
 };
 

@@ -168,10 +168,14 @@ export type ProjectAgentOrchestratorSettings = {
 export type ProjectEngineSettings = {
   defaultTaskBackend?: import("@/lib/engine/loop-engine-types").ExecutorBackend;
   defaultReviewBackend?: import("@/lib/engine/loop-engine-types").ExecutorBackend;
+  /** When true with global auto-run, the scheduler chains workflow steps automatically. */
+  autoAdvanceEnabled?: boolean;
   agentOrchestrator?: ProjectAgentOrchestratorSettings;
 };
 
-export const defaultProjectEngineSettings: ProjectEngineSettings = {};
+export const defaultProjectEngineSettings: ProjectEngineSettings = {
+  autoAdvanceEnabled: false,
+};
 
 export const defaultProjectAutomationPolicy: ProjectAutomationPolicy = {
   allowLowRiskAutoIssueCreation: true,

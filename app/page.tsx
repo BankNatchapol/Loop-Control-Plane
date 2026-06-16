@@ -1438,6 +1438,34 @@ function LoopEnginePanel({
         </p>
       ) : null}
 
+      {engineStatus?.autoAdvance ? (
+        <div
+          className="mt-2 border border-slate-200 bg-white px-2 py-1.5 text-xs leading-5 text-slate-700"
+          data-testid="engine-auto-advance-status"
+        >
+          <p className="font-semibold uppercase text-slate-500">Auto-Advance</p>
+          <p className="mt-1">
+            Project:{" "}
+            <span className="font-semibold text-slate-950">
+              {engineStatus.autoAdvance.projectEnabled ? "enabled" : "disabled"}
+            </span>
+            {" · "}
+            Global auto-run:{" "}
+            <span className="font-semibold text-slate-950">
+              {engineStatus.autoAdvance.globallyEnabled ? "on" : "off"}
+            </span>
+            {engineStatus.autoAdvance.active ? (
+              <span className="ml-1 font-semibold text-emerald-700">· active</span>
+            ) : null}
+          </p>
+          {engineStatus.autoAdvance.pauseReason ? (
+            <p className="mt-1 border border-amber-200 bg-amber-50 px-2 py-1 text-amber-900">
+              Paused: {engineStatus.autoAdvance.pauseReason.message}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
       {engineError ? (
         <div className="mt-2 border border-red-200 bg-red-50 px-2 py-1.5 text-xs leading-5 text-red-800">
           {engineError}
@@ -1708,6 +1736,25 @@ function ProjectForm({
             </select>
           </label>
         </div>
+        <label className="mt-3 flex min-h-9 items-center gap-2 text-xs font-semibold uppercase text-slate-700">
+          <input
+            type="checkbox"
+            checked={form.engineSettings.autoAdvanceEnabled ?? false}
+            onChange={(event) =>
+              onChange("engineSettings", {
+                ...form.engineSettings,
+                autoAdvanceEnabled: event.target.checked,
+              })
+            }
+            className="h-4 w-4 shrink-0 accent-slate-900"
+            data-testid="project-auto-advance-enabled"
+          />
+          Enable workflow auto-advance
+        </label>
+        <p className="mt-1 text-xs leading-5 text-slate-500">
+          When global auto-run is also enabled, completed workflow steps chain
+          automatically until approval gates, failures, or manual-only nodes.
+        </p>
       </div>
       <div className="mt-3 border border-slate-200 bg-slate-50 p-3">
         <p className="text-xs font-semibold uppercase text-slate-500">

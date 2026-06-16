@@ -26,6 +26,7 @@ import {
   redactSensitiveText,
 } from "@/lib/security/safe-context";
 import { completeWorkflowStepFromEngineJob } from "@/lib/workflows/workflow-runner";
+import { maybeFollowUpAfterCompletedJob } from "@/lib/engine/auto-advance";
 
 export const ENGINE_JOB_AWAITING_EXTERNAL_SYNC_KEY = "awaitingExternalSync";
 
@@ -444,6 +445,12 @@ const reconcileCompletedEngineJob = async (input: {
       }
     }
   }
+
+  const updatedJob = input.repository.getEngineJob(input.job.id);
+  maybeFollowUpAfterCompletedJob(input.repository, updatedJob, {
+    tickMode: "automated",
+    success: input.executorResult.success,
+  });
 
   return {
     completed: input.executorResult.success ? 1 : 0,
