@@ -79,15 +79,25 @@ export const handleApiError = (error: unknown) => {
 };
 
 export const withLoopBoardRepository = <T>(
-  operation: (repository: LoopBoardRepository) => T,
-): T => {
+  operation: (repository: LoopBoardRepository) => T | Promise<T>,
+): T | Promise<T> => {
   const database = openLoopBoardDatabase();
+  applyMigrations(database);
+  const repository = new LoopBoardRepository(database);
 
   try {
-    applyMigrations(database);
-    return operation(new LoopBoardRepository(database));
-  } finally {
+    const result = operation(repository);
+    if (result instanceof Promise) {
+      return result.finally(() => {
+        database.close();
+      });
+    }
+
     database.close();
+    return result;
+  } catch (error) {
+    database.close();
+    throw error;
   }
 };
 

@@ -73,6 +73,18 @@ describe("Loop Control Plane SQLite setup", () => {
           .get(seedProject.id)?.github_repository,
         seedProject.githubRepository,
       );
+      assert.equal(
+        database.prepare("SELECT COUNT(*) AS count FROM engine_jobs").get()?.count,
+        1,
+      );
+      assert.equal(
+        database
+          .prepare(
+            "SELECT status FROM engine_scheduler_state WHERE id = 'default'",
+          )
+          .get()?.status,
+        "stopped",
+      );
 
       const seededTask = database
         .prepare(
@@ -106,6 +118,10 @@ describe("Loop Control Plane SQLite setup", () => {
       assert.ok(indexes.includes("feature_events_feature_created_at_idx"));
       assert.ok(indexes.includes("workflows_project_id_idx"));
       assert.ok(indexes.includes("workflow_runs_project_status_idx"));
+      assert.ok(indexes.includes("engine_jobs_status_idx"));
+      assert.ok(indexes.includes("engine_jobs_status_queued_at_idx"));
+      assert.ok(indexes.includes("engine_jobs_project_id_idx"));
+      assert.ok(indexes.includes("engine_jobs_project_status_idx"));
     } finally {
       database.close();
       rmSync(tempDirectory, { recursive: true, force: true });

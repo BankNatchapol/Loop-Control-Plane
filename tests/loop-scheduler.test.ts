@@ -231,6 +231,37 @@ describe("Loop scheduler service", () => {
     });
   });
 
+  it("dequeues the oldest queued job after enqueue on manual tick", async () => {
+    await withRepository(async (repository) => {
+      repository.createEngineJob({
+        id: "engine-job-first",
+        kind: "demo-ping",
+        backend: "stub",
+        projectId: seedProject.id,
+        queuedAt: "2026-06-16T10:00:00.000Z",
+        createdAt: "2026-06-16T10:00:00.000Z",
+      });
+      repository.createEngineJob({
+        id: "engine-job-second",
+        kind: "demo-ping",
+        backend: "stub",
+        projectId: seedProject.id,
+        queuedAt: "2026-06-16T11:00:00.000Z",
+        createdAt: "2026-06-16T11:00:00.000Z",
+      });
+
+      assert.equal(repository.fetchNextQueuedJob()?.id, "engine-job-first");
+
+      const scheduler = new LoopScheduler(repository);
+      const firstTick = await scheduler.tick({ mode: "manual" });
+
+      assert.equal(firstTick.plan.action, "process");
+      assert.equal(firstTick.job?.id, "engine-job-first");
+      assert.equal(firstTick.job?.status, "completed");
+      assert.equal(repository.fetchNextQueuedJob()?.id, "engine-job-second");
+    });
+  });
+
   it("executes a queued stub job on manual tick and completes it", async () => {
     await withRepository(async (repository) => {
       repository.createEngineJob({
