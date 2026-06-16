@@ -35,6 +35,7 @@ import {
   ListRestart,
   PauseCircle,
   Pencil,
+  Play,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -62,7 +63,9 @@ import {
   fetchPersistedTaskHandoff,
   fetchFeatureArtifactDocument,
   fetchTaskContextStatus,
+  enqueueEngineDemoJob,
   fetchBoardData,
+  fetchEngineStatus,
   generatePersistedTaskClaudeCodePrompt,
   importSpecKitTasks,
   movePersistedTask,
@@ -72,7 +75,10 @@ import {
   refreshPersistedTaskHandoff,
   savePersistedTaskHandoff,
   saveFeatureArtifactDocument,
+  startEngineScheduler,
+  stopEngineScheduler,
   setupProjectGitHubLabels,
+  tickEngine,
   syncPersistedTaskGitHubIssueLabels,
   syncPersistedTaskGitHubPullRequest,
   updateAutomationSettings,
@@ -88,6 +94,11 @@ import {
   type TaskContextActionResult,
   type TaskOpenActionResult,
 } from "@/lib/api/loopboard-client";
+import type { EngineStatusResponse } from "@/lib/api/engine-actions";
+import type {
+  EngineJobStatus,
+  EngineSchedulerState,
+} from "@/lib/engine/loop-engine-types";
 import type { TaskContextStatus } from "@/lib/context/task-context-service";
 import type { BoardData, PersistedTask } from "@/lib/db/loopboard-repository";
 import { WorkflowEditor } from "@/app/workflow-editor";
@@ -1158,6 +1169,274 @@ function ProjectHealth({
         ) : null}
       </div>
     </div>
+  );
+}
+
+const engineSchedulerStyles: Record<EngineSchedulerState, string> = {
+  stopped: "border-slate-200 bg-slate-100 text-slate-700",
+  running: "border-emerald-200 bg-emerald-50 text-emerald-800",
+  paused: "border-amber-200 bg-amber-50 text-amber-800",
+};
+
+const engineJobStatusStyles: Record<EngineJobStatus, string> = {
+  queued: "border-sky-200 bg-sky-50 text-sky-800",
+  running: "border-indigo-200 bg-indigo-50 text-indigo-800",
+  completed: "border-emerald-200 bg-emerald-50 text-emerald-800",
+  failed: "border-red-200 bg-red-50 text-red-800",
+  cancelled: "border-slate-200 bg-slate-100 text-slate-600",
+};
+
+function LoopEnginePanel({
+  project,
+  engineStatus,
+  isLoading,
+  engineAction,
+  engineError,
+  engineMessage,
+  globalAutoRunEnabled,
+  automationPolicyMessage,
+  onRunDemoJob,
+  onTickOnce,
+  onStartScheduler,
+  onStopScheduler,
+  onRefresh,
+}: {
+  project?: Project;
+  engineStatus: EngineStatusResponse | null;
+  isLoading: boolean;
+  engineAction: string;
+  engineError: string;
+  engineMessage: string;
+  globalAutoRunEnabled: boolean;
+  automationPolicyMessage: string;
+  onRunDemoJob: () => void;
+  onTickOnce: () => void;
+  onStartScheduler: () => void;
+  onStopScheduler: () => void;
+  onRefresh: () => void;
+}) {
+  if (!project) {
+    return null;
+  }
+
+  const schedulerStatus = engineStatus?.scheduler.status ?? "stopped";
+  const queueDepth =
+    (engineStatus?.queueCounts.queued ?? 0) +
+    (engineStatus?.queueCounts.running ?? 0);
+  const activeBackend =
+    engineStatus?.recentJobs.find((job) => job.status === "running")?.backend ??
+    engineStatus?.recentJobs[0]?.backend ??
+    "none";
+  const canStartScheduler = globalAutoRunEnabled;
+  const schedulerIsRunning = schedulerStatus === "running";
+
+  return (
+    <section
+      className="border border-slate-200 bg-slate-50 p-3"
+      data-testid="loop-engine-panel"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <Bot className="h-4 w-4 text-slate-500" />
+            <h2 className="text-sm font-semibold uppercase text-slate-950">
+              Loop Engine
+            </h2>
+            <span
+              className={clsx(
+                "inline-flex border px-1.5 py-0.5 text-[10px] font-semibold uppercase",
+                engineSchedulerStyles[schedulerStatus],
+              )}
+            >
+              {compactText(schedulerStatus)}
+            </span>
+          </div>
+          <p className="mt-1 text-xs leading-5 text-slate-600">
+            Hybrid in-app scheduler with stub executor jobs. Manual tick and demo
+            enqueue work while global auto-run is disabled.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={isLoading}
+          className="inline-flex items-center gap-1 border border-slate-300 bg-white px-2 py-1 text-[10px] font-semibold uppercase text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <RefreshCw className={clsx("h-3 w-3", isLoading && "animate-spin")} />
+          Refresh
+        </button>
+      </div>
+
+      <div className="mt-3 grid gap-2 text-xs text-slate-700 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="min-w-0 border border-slate-200 bg-white px-2 py-1.5">
+          <p className="font-semibold uppercase text-slate-500">Queue Depth</p>
+          <p className="mt-0.5 text-base font-semibold text-slate-950">{queueDepth}</p>
+          <p className="mt-0.5 truncate text-[10px] text-slate-500">
+            {engineStatus?.queueCounts.queued ?? 0} queued ·{" "}
+            {engineStatus?.queueCounts.running ?? 0} running
+          </p>
+        </div>
+        <div className="min-w-0 border border-slate-200 bg-white px-2 py-1.5">
+          <p className="font-semibold uppercase text-slate-500">Last Tick</p>
+          <p className="mt-0.5 truncate font-semibold text-slate-950">
+            {engineStatus?.scheduler.lastTickAt
+              ? formatTimestamp(engineStatus.scheduler.lastTickAt)
+              : "never"}
+          </p>
+          <p className="mt-0.5 truncate text-[10px] text-slate-500">
+            {engineStatus?.scheduler.tickCount ?? 0} ticks total
+          </p>
+        </div>
+        <div className="min-w-0 border border-slate-200 bg-white px-2 py-1.5">
+          <p className="font-semibold uppercase text-slate-500">Active Backend</p>
+          <p className="mt-0.5 truncate font-semibold uppercase text-slate-950">
+            {activeBackend}
+          </p>
+          <p className="mt-0.5 truncate text-[10px] text-slate-500">
+            {engineStatus?.queueCounts.completed ?? 0} completed ·{" "}
+            {engineStatus?.queueCounts.failed ?? 0} failed
+          </p>
+        </div>
+        <div className="min-w-0 border border-slate-200 bg-white px-2 py-1.5">
+          <p className="font-semibold uppercase text-slate-500">Scheduler Error</p>
+          <p className="mt-0.5 truncate font-semibold text-slate-950">
+            {engineStatus?.scheduler.lastError ? "present" : "none"}
+          </p>
+          <p className="mt-0.5 line-clamp-2 text-[10px] text-slate-500">
+            {engineStatus?.scheduler.lastError ?? "No scheduler errors recorded."}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={onRunDemoJob}
+          disabled={engineAction.length > 0}
+          className="inline-flex items-center gap-1.5 border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+          data-testid="engine-run-demo-job"
+        >
+          <CircleDot className="h-3.5 w-3.5 shrink-0" />
+          Run Demo Job
+        </button>
+        <button
+          type="button"
+          onClick={onTickOnce}
+          disabled={engineAction.length > 0}
+          className="inline-flex items-center gap-1.5 border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+          data-testid="engine-tick-once"
+        >
+          <RefreshCw
+            className={clsx(
+              "h-3.5 w-3.5 shrink-0",
+              engineAction === "tick" && "animate-spin",
+            )}
+          />
+          Tick Once
+        </button>
+        <button
+          type="button"
+          onClick={onStartScheduler}
+          disabled={!canStartScheduler || schedulerIsRunning || engineAction.length > 0}
+          title={
+            canStartScheduler
+              ? "Start background scheduler ticks"
+              : automationPolicyMessage
+          }
+          className="inline-flex items-center gap-1.5 border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+          data-testid="engine-start-scheduler"
+        >
+          <Play className="h-3.5 w-3.5 shrink-0" />
+          Start Scheduler
+        </button>
+        <button
+          type="button"
+          onClick={onStopScheduler}
+          disabled={!schedulerIsRunning || engineAction.length > 0}
+          className="inline-flex items-center gap-1.5 border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+          data-testid="engine-stop-scheduler"
+        >
+          <PauseCircle className="h-3.5 w-3.5 shrink-0" />
+          Stop Scheduler
+        </button>
+      </div>
+
+      {!canStartScheduler ? (
+        <p className="mt-2 border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs leading-5 text-amber-900">
+          Start Scheduler requires global auto-run. {automationPolicyMessage}
+        </p>
+      ) : null}
+
+      {engineError ? (
+        <div className="mt-2 border border-red-200 bg-red-50 px-2 py-1.5 text-xs leading-5 text-red-800">
+          {engineError}
+        </div>
+      ) : null}
+      {engineMessage ? (
+        <div className="mt-2 border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs leading-5 text-emerald-800">
+          {engineMessage}
+        </div>
+      ) : null}
+
+      <div className="mt-3 overflow-x-auto border border-slate-200 bg-white">
+        <table className="min-w-full text-left text-xs">
+          <thead className="border-b border-slate-200 bg-slate-50 text-[10px] font-semibold uppercase text-slate-500">
+            <tr>
+              <th className="px-2 py-1.5">Job</th>
+              <th className="px-2 py-1.5">Status</th>
+              <th className="px-2 py-1.5">Backend</th>
+              <th className="px-2 py-1.5">Logs</th>
+              <th className="px-2 py-1.5">Updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(engineStatus?.recentJobs ?? []).length === 0 ? (
+              <tr>
+                <td
+                  colSpan={5}
+                  className="px-2 py-3 text-center text-slate-500"
+                >
+                  No engine jobs yet. Run a demo job to seed the queue.
+                </td>
+              </tr>
+            ) : (
+              engineStatus?.recentJobs.map((job) => (
+                <tr key={job.id} className="border-b border-slate-100 last:border-b-0">
+                  <td className="px-2 py-1.5">
+                    <p className="font-semibold text-slate-950">{job.kind}</p>
+                    <p className="truncate font-mono text-[10px] text-slate-500">
+                      {job.id}
+                    </p>
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <span
+                      className={clsx(
+                        "inline-flex border px-1.5 py-0.5 text-[10px] font-semibold uppercase",
+                        engineJobStatusStyles[job.status],
+                      )}
+                    >
+                      {compactText(job.status)}
+                    </span>
+                  </td>
+                  <td className="px-2 py-1.5 uppercase">{job.backend}</td>
+                  <td className="max-w-xs px-2 py-1.5">
+                    <p className="truncate text-slate-700">
+                      {job.lastLogMessage ?? `${job.logCount} log entries`}
+                    </p>
+                    {job.error ? (
+                      <p className="truncate text-[10px] text-red-700">{job.error}</p>
+                    ) : null}
+                  </td>
+                  <td className="px-2 py-1.5 whitespace-nowrap text-slate-600">
+                    {formatTimestamp(job.completedAt ?? job.startedAt ?? job.queuedAt)}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
@@ -2447,6 +2726,11 @@ export default function Home() {
   const [importMessage, setImportMessage] = useState("");
   const [isImportPreviewLoading, setIsImportPreviewLoading] = useState(false);
   const [isImportingSpecKitTasks, setIsImportingSpecKitTasks] = useState(false);
+  const [engineStatus, setEngineStatus] = useState<EngineStatusResponse | null>(null);
+  const [engineError, setEngineError] = useState("");
+  const [engineMessage, setEngineMessage] = useState("");
+  const [engineAction, setEngineAction] = useState("");
+  const [isLoadingEngineStatus, setIsLoadingEngineStatus] = useState(false);
   const { projects, features, tasks, latestWorkflowRuns } = boardData;
   const sensors = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor));
 
@@ -2580,7 +2864,7 @@ export default function Home() {
       setLoadError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not load persisted board data.",
+          : "Loop Control Plane could not load persisted board data.",
       );
     } finally {
       setIsLoadingBoard(false);
@@ -2598,7 +2882,7 @@ export default function Home() {
       setContextError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not load generated file paths.",
+          : "Loop Control Plane could not load generated file paths.",
       );
     }
   }, []);
@@ -2620,7 +2904,7 @@ export default function Home() {
       setContextError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not load handoff.md.",
+          : "Loop Control Plane could not load handoff.md.",
       );
     } finally {
       setHandoffAction("");
@@ -2650,10 +2934,39 @@ export default function Home() {
         setArtifactError(
           error instanceof LoopBoardApiError
             ? error.message
-            : "LoopBoard could not load the artifact file.",
+            : "Loop Control Plane could not load the artifact file.",
         );
       } finally {
         setIsLoadingArtifact(false);
+      }
+    },
+    [],
+  );
+
+  const loadEngineStatus = useCallback(
+    async (projectId?: string, options: { silent?: boolean } = {}) => {
+      if (!projectId) {
+        setEngineStatus(null);
+        return;
+      }
+
+      if (!options.silent) {
+        setIsLoadingEngineStatus(true);
+      }
+
+      try {
+        const status = await fetchEngineStatus(projectId);
+        setEngineStatus(status);
+      } catch (error) {
+        setEngineError(
+          error instanceof LoopBoardApiError
+            ? error.message
+            : "Loop Control Plane could not load engine status.",
+        );
+      } finally {
+        if (!options.silent) {
+          setIsLoadingEngineStatus(false);
+        }
       }
     },
     [],
@@ -2707,6 +3020,21 @@ export default function Home() {
     setImportError("");
     setImportMessage("");
   }, [selectedFeature?.id]);
+
+  useEffect(() => {
+    if (!selectedProject?.id) {
+      setEngineStatus(null);
+      return;
+    }
+
+    void loadEngineStatus(selectedProject.id, { silent: true });
+
+    const interval = window.setInterval(() => {
+      void loadEngineStatus(selectedProject.id, { silent: true });
+    }, 3_000);
+
+    return () => window.clearInterval(interval);
+  }, [loadEngineStatus, selectedProject?.id]);
 
   function selectTask(taskId: string) {
     setSelectedTaskId(taskId);
@@ -2833,7 +3161,7 @@ export default function Home() {
       setProjectMutationError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not save the project.",
+          : "Loop Control Plane could not save the project.",
       );
     } finally {
       setIsSavingProject(false);
@@ -2857,7 +3185,7 @@ export default function Home() {
       setProjectMutationError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not check the GitHub connection.",
+          : "Loop Control Plane could not check the GitHub connection.",
       );
     } finally {
       setIsCheckingGitHub(false);
@@ -2882,12 +3210,149 @@ export default function Home() {
           ? "Global auto-run enabled. Project policy gates still apply."
           : "Global auto-run disabled.",
       );
+
+      if (!settings.globalAutoRunEnabled && engineStatus?.scheduler.status === "running") {
+        try {
+          const stopped = await stopEngineScheduler();
+          setEngineStatus((currentStatus) =>
+            currentStatus
+              ? { ...currentStatus, scheduler: stopped.scheduler }
+              : currentStatus,
+          );
+        } catch {
+          // Engine status polling will reconcile scheduler state.
+        }
+      }
+
+      if (selectedProject?.id) {
+        void loadEngineStatus(selectedProject.id, { silent: true });
+      }
     } catch (error) {
       setProjectMutationError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not update automation settings.",
+          : "Loop Control Plane could not update automation settings.",
       );
+    }
+  }
+
+  async function runEngineDemoJob() {
+    if (!selectedProject) {
+      return;
+    }
+
+    setEngineError("");
+    setEngineMessage("");
+    setEngineAction("demo");
+
+    try {
+      const result = await enqueueEngineDemoJob(selectedProject.id);
+      setEngineMessage(`Demo job ${result.job.id} queued (${result.job.status}).`);
+      await loadEngineStatus(selectedProject.id, { silent: true });
+    } catch (error) {
+      setEngineError(
+        error instanceof LoopBoardApiError
+          ? error.message
+          : "Loop Control Plane could not enqueue the demo job.",
+      );
+    } finally {
+      setEngineAction("");
+    }
+  }
+
+  async function tickEngineOnce() {
+    if (!selectedProject) {
+      return;
+    }
+
+    setEngineError("");
+    setEngineMessage("");
+    setEngineAction("tick");
+
+    try {
+      const result = await tickEngine({ mode: "manual" });
+      const jobSummary =
+        result.job !== undefined
+          ? `${result.job.id} → ${result.job.status}`
+          : result.plan.action === "process"
+            ? result.plan.jobId
+            : result.plan.reason;
+      setEngineMessage(`Manual tick: ${result.plan.action} (${jobSummary}).`);
+      setEngineStatus((currentStatus) =>
+        currentStatus
+          ? {
+              ...currentStatus,
+              scheduler: result.scheduler,
+            }
+          : currentStatus,
+      );
+      await loadEngineStatus(selectedProject.id, { silent: true });
+    } catch (error) {
+      setEngineError(
+        error instanceof LoopBoardApiError
+          ? error.message
+          : "Loop Control Plane could not run an engine tick.",
+      );
+    } finally {
+      setEngineAction("");
+    }
+  }
+
+  async function startEngineSchedulerAction() {
+    if (!selectedProject) {
+      return;
+    }
+
+    setEngineError("");
+    setEngineMessage("");
+    setEngineAction("start");
+
+    try {
+      const result = await startEngineScheduler();
+      setEngineMessage("Engine scheduler started with background ticks.");
+      setEngineStatus((currentStatus) =>
+        currentStatus
+          ? { ...currentStatus, scheduler: result.scheduler }
+          : currentStatus,
+      );
+      await loadEngineStatus(selectedProject.id, { silent: true });
+    } catch (error) {
+      setEngineError(
+        error instanceof LoopBoardApiError
+          ? error.message
+          : "Loop Control Plane could not start the engine scheduler.",
+      );
+    } finally {
+      setEngineAction("");
+    }
+  }
+
+  async function stopEngineSchedulerAction() {
+    if (!selectedProject) {
+      return;
+    }
+
+    setEngineError("");
+    setEngineMessage("");
+    setEngineAction("stop");
+
+    try {
+      const result = await stopEngineScheduler();
+      setEngineMessage("Engine scheduler stopped.");
+      setEngineStatus((currentStatus) =>
+        currentStatus
+          ? { ...currentStatus, scheduler: result.scheduler }
+          : currentStatus,
+      );
+      await loadEngineStatus(selectedProject.id, { silent: true });
+    } catch (error) {
+      setEngineError(
+        error instanceof LoopBoardApiError
+          ? error.message
+          : "Loop Control Plane could not stop the engine scheduler.",
+      );
+    } finally {
+      setEngineAction("");
     }
   }
 
@@ -2908,7 +3373,7 @@ export default function Home() {
       setProjectMutationError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not set up GitHub labels.",
+          : "Loop Control Plane could not set up GitHub labels.",
       );
     } finally {
       setIsSettingUpGitHubLabels(false);
@@ -2933,7 +3398,7 @@ export default function Home() {
       setProjectMutationError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not delete the project.",
+          : "Loop Control Plane could not delete the project.",
       );
     } finally {
       setIsSavingProject(false);
@@ -2978,7 +3443,7 @@ export default function Home() {
       setFeatureMutationError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not save the feature.",
+          : "Loop Control Plane could not save the feature.",
       );
     } finally {
       setIsSavingFeature(false);
@@ -3003,7 +3468,7 @@ export default function Home() {
       setFeatureMutationError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not delete the feature.",
+          : "Loop Control Plane could not delete the feature.",
       );
     } finally {
       setIsSavingFeature(false);
@@ -3036,7 +3501,7 @@ export default function Home() {
       setFeatureMutationError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not approve the feature artifact.",
+          : "Loop Control Plane could not approve the feature artifact.",
       );
     } finally {
       setApprovingArtifactName("");
@@ -3063,7 +3528,7 @@ export default function Home() {
       setProjectMutationError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not open the project.",
+          : "Loop Control Plane could not open the project.",
       );
     } finally {
       setProjectOpenAction("");
@@ -3090,7 +3555,7 @@ export default function Home() {
       setContextError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not open the task workspace.",
+          : "Loop Control Plane could not open the task workspace.",
       );
     } finally {
       setTaskOpenAction("");
@@ -3130,7 +3595,7 @@ export default function Home() {
       setArtifactError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not save the artifact file.",
+          : "Loop Control Plane could not save the artifact file.",
       );
     } finally {
       setIsSavingArtifact(false);
@@ -3161,7 +3626,7 @@ export default function Home() {
       setImportError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not parse Spec Kit tasks.",
+          : "Loop Control Plane could not parse Spec Kit tasks.",
       );
     } finally {
       setIsImportPreviewLoading(false);
@@ -3256,7 +3721,7 @@ export default function Home() {
       setImportError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not import Spec Kit tasks.",
+          : "Loop Control Plane could not import Spec Kit tasks.",
       );
     } finally {
       setIsImportingSpecKitTasks(false);
@@ -3291,7 +3756,7 @@ export default function Home() {
       setMutationError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not move the task.",
+          : "Loop Control Plane could not move the task.",
       );
     } finally {
       setMutatingTaskId("");
@@ -3350,7 +3815,7 @@ export default function Home() {
       setMutationError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not apply that task action.",
+          : "Loop Control Plane could not apply that task action.",
       );
     } finally {
       setMutatingTaskId("");
@@ -3374,7 +3839,7 @@ export default function Home() {
       setMutationError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not create the GitHub issue.",
+          : "Loop Control Plane could not create the GitHub issue.",
       );
     } finally {
       setMutatingTaskId("");
@@ -3417,7 +3882,7 @@ export default function Home() {
       setMutationError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not sync GitHub issue labels.",
+          : "Loop Control Plane could not sync GitHub issue labels.",
       );
     } finally {
       setMutatingTaskId("");
@@ -3444,7 +3909,7 @@ export default function Home() {
       setMutationError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not sync GitHub PR/CI state.",
+          : "Loop Control Plane could not sync GitHub PR/CI state.",
       );
     } finally {
       setMutatingTaskId("");
@@ -3511,7 +3976,7 @@ export default function Home() {
       setContextError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not update the generated context file.",
+          : "Loop Control Plane could not update the generated context file.",
       );
     } finally {
       setContextAction("");
@@ -3542,7 +4007,7 @@ export default function Home() {
       setContextError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not save handoff.md.",
+          : "Loop Control Plane could not save handoff.md.",
       );
     } finally {
       setHandoffAction("");
@@ -3572,7 +4037,7 @@ export default function Home() {
       setContextError(
         error instanceof LoopBoardApiError
           ? error.message
-          : "LoopBoard could not generate the Claude Code prompt.",
+          : "Loop Control Plane could not generate the Claude Code prompt.",
       );
     } finally {
       setClaudePromptAction("");
@@ -3591,7 +4056,7 @@ export default function Home() {
       setContextMessage("Claude Code prompt copied to clipboard.");
     } catch {
       setContextMessage("");
-      setContextError("LoopBoard could not copy the Claude Code prompt.");
+      setContextError("Loop Control Plane could not copy the Claude Code prompt.");
     }
   }
 
@@ -3602,7 +4067,7 @@ export default function Home() {
       setContextMessage("Path copied to clipboard.");
     } catch {
       setContextMessage("");
-      setContextError("LoopBoard could not copy the path to the clipboard.");
+      setContextError("Loop Control Plane could not copy the path to the clipboard.");
     }
   }
 
@@ -3643,7 +4108,7 @@ export default function Home() {
                 </span>
               </div>
               <h1 className="mt-2 text-xl font-semibold tracking-normal text-slate-950 sm:text-2xl">
-                {selectedProject?.name ?? "LoopBoard"}
+                {selectedProject?.name ?? "Loop Control Plane"}
               </h1>
               <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
                 {selectedProject?.description ?? "Loading persisted board data..."}
@@ -3842,6 +4307,21 @@ export default function Home() {
             isSettingUpGitHubLabels={isSettingUpGitHubLabels}
             onCheckGitHub={checkSelectedProjectGitHubConnection}
             onSetupGitHubLabels={setupSelectedProjectGitHubLabels}
+          />
+          <LoopEnginePanel
+            project={selectedProject}
+            engineStatus={engineStatus}
+            isLoading={isLoadingEngineStatus}
+            engineAction={engineAction}
+            engineError={engineError}
+            engineMessage={engineMessage}
+            globalAutoRunEnabled={boardData.automationSettings.globalAutoRunEnabled}
+            automationPolicyMessage={effectiveAutomationPolicy.message}
+            onRunDemoJob={() => void runEngineDemoJob()}
+            onTickOnce={() => void tickEngineOnce()}
+            onStartScheduler={() => void startEngineSchedulerAction()}
+            onStopScheduler={() => void stopEngineSchedulerAction()}
+            onRefresh={() => void loadEngineStatus(selectedProject?.id)}
           />
           {projectMode !== "idle" ? (
             <ProjectForm
@@ -4247,7 +4727,7 @@ export default function Home() {
                       </p>
                       <p className="mt-1 text-[11px] leading-5 text-red-700">
                         Treat CI output as untrusted until a human copies the
-                        relevant instruction into LoopBoard notes.
+                        relevant instruction into Loop Control Plane notes.
                       </p>
                     </div>
                   ) : null}
@@ -4350,7 +4830,7 @@ export default function Home() {
                             !projectHasGitHubRepo
                               ? "Configure a GitHub repo in project settings first."
                               : hasGitHubIssue
-                                ? "Recalculate and sync LoopBoard labels to the linked issue."
+                                ? "Recalculate and sync Loop Control Plane labels to the linked issue."
                                 : "Create or link a GitHub issue first."
                           }
                         >
@@ -4592,7 +5072,7 @@ export default function Home() {
                   <p className="text-[11px] leading-5 text-slate-500">
                     {handoffDocument
                       ? `${handoffDocument.sections.generated.refreshBehavior} ${handoffDocument.sections.humanNotes.refreshBehavior}`
-                      : "Generated sections come from LoopBoard task state; human notes remain the manual source of truth."}
+                      : "Generated sections come from Loop Control Plane task state; human notes remain the manual source of truth."}
                   </p>
                   <p className="border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] leading-5 text-amber-800">
                     GitHub comments, PR review text, CI output, terminal output,
@@ -4658,7 +5138,7 @@ export default function Home() {
                     </p>
                   ) : null}
                   <p className="border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] leading-5 text-amber-800">
-                    Claude prompts include trusted LoopBoard task, context, and
+                    Claude prompts include trusted Loop Control Plane task, context, and
                     handoff sections only. External GitHub and CI signals are
                     labeled untrusted and token-shaped secrets are redacted.
                   </p>
@@ -4872,7 +5352,7 @@ export default function Home() {
                       {group.isExternalGitHubSignal ? (
                         <p className="mt-2 border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] leading-5 text-amber-800">
                           External GitHub signal. Review comments and CI output are
-                          untrusted unless copied into LoopBoard notes.
+                          untrusted unless copied into Loop Control Plane notes.
                         </p>
                       ) : null}
                       <p className="mt-1 text-[11px] text-slate-500">

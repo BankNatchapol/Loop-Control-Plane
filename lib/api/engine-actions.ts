@@ -14,6 +14,10 @@ import {
   type TickResult,
 } from "@/lib/engine/loop-scheduler";
 import {
+  startSchedulerBackgroundTicks,
+  stopSchedulerBackgroundTicks,
+} from "@/lib/engine/scheduler-interval";
+import {
   describeEffectiveAutomationPolicy,
   type PolicyDecision,
 } from "@/lib/policies/automation-policy";
@@ -138,15 +142,22 @@ export const getEngineStatus = (
 
 export const startEngineScheduler = (
   repository: LoopBoardRepository,
-): EngineSchedulerActionResponse => ({
-  scheduler: new LoopScheduler(repository).start(),
-});
+): EngineSchedulerActionResponse => {
+  const scheduler = new LoopScheduler(repository).start();
+  startSchedulerBackgroundTicks();
+
+  return { scheduler };
+};
 
 export const stopEngineScheduler = (
   repository: LoopBoardRepository,
-): EngineSchedulerActionResponse => ({
-  scheduler: new LoopScheduler(repository).stop(),
-});
+): EngineSchedulerActionResponse => {
+  stopSchedulerBackgroundTicks();
+
+  return {
+    scheduler: new LoopScheduler(repository).stop(),
+  };
+};
 
 export const tickEngine = async (
   repository: LoopBoardRepository,
