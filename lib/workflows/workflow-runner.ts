@@ -15,11 +15,13 @@ import type {
   WorkflowRun,
   WorkflowRunStep,
 } from "@/lib/loopboard";
+import { LoopScheduler } from "@/lib/engine/loop-scheduler";
 import { evaluateWorkflowNodePolicy } from "@/lib/policies/automation-policy";
 
 export type WorkflowRunAction =
   | "start"
   | "run-next"
+  | "run-next-engine"
   | "approve"
   | "skip-disabled"
   | "fail"
@@ -868,6 +870,26 @@ export const resumeWorkflowRun = ({
   });
 };
 
+export const runNextWorkflowStepWithEngineTick = async ({
+  repository,
+  runId,
+}: {
+  repository: LoopBoardRepository;
+  runId: string;
+}): Promise<WorkflowRun> => {
+  const runAfterAdvance = runNextWorkflowStep({ repository, runId });
+  const workflow = repository.getWorkflow(runAfterAdvance.workflowId);
+  const node = findCurrentNode(workflow, runAfterAdvance);
+  const step = latestStepForNode(runAfterAdvance, node.id);
+
+  if (step?.status === "running") {
+    await new LoopScheduler(repository).tick({ mode: "manual" });
+    return repository.getWorkflowRun(runId);
+  }
+
+  return runAfterAdvance;
+};
+
 export const applyWorkflowRunAction = ({
   repository,
   runId,
@@ -880,6 +902,10 @@ export const applyWorkflowRunAction = ({
   switch (input.action) {
     case "run-next":
       return runNextWorkflowStep({ repository, runId });
+    case "run-next-engine":
+      throw new ValidationError(
+        "Use runNextWorkflowStepWithEngineTick for run-next-engine actions.",
+      );
     case "approve":
       return approveWorkflowRunStep({ repository, runId });
     case "skip-disabled":

@@ -92,6 +92,8 @@ describe("Loop engine API actions", () => {
       kind: "demo-ping",
       status: "failed",
       backend: "stub",
+      workflowRunId: "workflow-run-1",
+      workflowNodeId: "node-import-tasks",
       payload: {},
       executionLogs: [
         {
@@ -110,6 +112,8 @@ describe("Loop engine API actions", () => {
 
     assert.match(summary.error ?? "", /\[redacted\]/);
     assert.match(summary.lastLogMessage ?? "", /\[redacted\]/);
+    assert.equal(summary.workflowRunId, "workflow-run-1");
+    assert.equal(summary.workflowNodeId, "node-import-tasks");
   });
 
   it("denies scheduler start when global auto-run is disabled", () => {

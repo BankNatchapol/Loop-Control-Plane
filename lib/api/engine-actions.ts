@@ -38,6 +38,8 @@ export type EngineJobSummary = {
   backend: EngineJob["backend"];
   projectId?: string;
   taskId?: string;
+  workflowRunId?: string;
+  workflowNodeId?: string;
   attempt: number;
   maxAttempts: number;
   error?: string;
@@ -82,6 +84,8 @@ export const summarizeEngineJob = (job: EngineJob): EngineJobSummary => {
     backend: job.backend,
     projectId: job.projectId,
     taskId: job.taskId,
+    workflowRunId: job.workflowRunId,
+    workflowNodeId: job.workflowNodeId,
     attempt: job.attempt,
     maxAttempts: job.maxAttempts,
     error: job.error ? redactSensitiveText(job.error) : undefined,

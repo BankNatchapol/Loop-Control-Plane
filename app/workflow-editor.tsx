@@ -35,6 +35,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createProjectWorkflow,
   exportWorkflow,
+  fetchEngineStatus,
   fetchProjectWorkflows,
   importProjectWorkflow,
   applyWorkflowRunAction,
@@ -42,6 +43,10 @@ import {
   updateWorkflow,
   LoopBoardApiError,
 } from "@/lib/api/loopboard-client";
+import type { EngineStatusResponse } from "@/lib/api/engine-actions";
+import type {
+  ExecutorBackend,
+} from "@/lib/engine/loop-engine-types";
 import type {
   Feature,
   Project,
@@ -73,6 +78,13 @@ import {
   workflowRiskPolicies,
   type WorkflowEditorNodeType,
 } from "@/lib/workflows/workflow-editor";
+import {
+  applyExecutorEditorPatch,
+  extractEngineJobIdFromWorkflowStep,
+  readExecutorEditorState,
+  workflowExecutorBackendOptions,
+  workflowNodeExecutorPolicyWarnings,
+} from "@/lib/workflows/workflow-executor-editor";
 
 type WorkflowCanvasNodeData = {
   label: string;
@@ -82,7 +94,10 @@ type WorkflowCanvasNodeData = {
 
 const compactText = (value: string) => value.replaceAll("-", " ");
 
-const nodeToCanvasNode = (node: WorkflowNode): Node<WorkflowCanvasNodeData> => ({
+const nodeToCanvasNode = (
+  node: WorkflowNode,
+  activeNodeId?: string | null,
+): Node<WorkflowCanvasNodeData> => ({
   id: node.id,
   position: node.position,
   data: {
@@ -97,6 +112,9 @@ const nodeToCanvasNode = (node: WorkflowNode): Node<WorkflowCanvasNodeData> => (
     node.mode === "semi" && "!border-violet-300 !bg-violet-50 !text-violet-900",
     node.mode === "disabled" && "!border-slate-300 !bg-slate-100 !text-slate-500",
   ),
+  style: node.id === activeNodeId
+    ? { outline: "3px solid #10b981", outlineOffset: "2px" }
+    : undefined,
 });
 
 const edgeToCanvasEdge = (edge: WorkflowEdge): Edge => ({
@@ -124,7 +142,7 @@ const createDraftWorkflow = (projectId: string): Workflow => {
     id: workflowId,
     projectId,
     name: "New Workflow",
-    description: "Draft LoopBoard workflow.",
+    description: "Draft Loop Control Plane workflow.",
     version: 1,
     nodes,
     edges: [
@@ -183,6 +201,7 @@ export function WorkflowEditor({
     WorkflowFileValidationError[]
   >([]);
   const [currentRun, setCurrentRun] = useState<WorkflowRun | null>(null);
+  const [engineStatus, setEngineStatus] = useState<EngineStatusResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isFileBusy, setIsFileBusy] = useState(false);
@@ -217,9 +236,45 @@ export function WorkflowEditor({
     [draftWorkflow],
   );
   const selectedNodeWarnings = useMemo(
-    () => (selectedNode ? workflowNodeWarnings(selectedNode) : []),
+    () =>
+      selectedNode
+        ? [
+            ...workflowNodeWarnings(selectedNode),
+            ...workflowNodeExecutorPolicyWarnings(selectedNode),
+          ]
+        : [],
     [selectedNode],
   );
+  const selectedNodeExecutor = useMemo(
+    () => (selectedNode ? readExecutorEditorState(selectedNode) : null),
+    [selectedNode],
+  );
+  const currentWorkflowStep = useMemo(() => {
+    if (!currentRun?.currentNodeId) {
+      return undefined;
+    }
+
+    return currentRun.steps
+      .filter((step) => step.workflowNodeId === currentRun.currentNodeId)
+      .at(-1);
+  }, [currentRun]);
+  const currentEngineJob = useMemo(() => {
+    if (!engineStatus || !currentRun) {
+      return undefined;
+    }
+
+    const engineJobId = extractEngineJobIdFromWorkflowStep(currentWorkflowStep);
+    if (engineJobId) {
+      return engineStatus.recentJobs.find((job) => job.id === engineJobId);
+    }
+
+    return engineStatus.recentJobs.find(
+      (job) =>
+        job.workflowRunId === currentRun.id &&
+        job.workflowNodeId === currentRun.currentNodeId,
+    );
+  }, [currentRun, currentWorkflowStep, engineStatus]);
+  const showEngineRunNext = !automationSettings.globalAutoRunEnabled;
   const effectiveAutomationPolicy = useMemo(
     () =>
       describeEffectiveAutomationPolicy({
@@ -233,8 +288,31 @@ export function WorkflowEditor({
     selectedWorkflowIdRef.current = selectedWorkflowId;
   }, [selectedWorkflowId]);
 
+  const refreshEngineStatus = useCallback(async () => {
+    if (!project) {
+      setEngineStatus(null);
+      return;
+    }
+
+    try {
+      const status = await fetchEngineStatus(project.id);
+      setEngineStatus(status);
+    } catch {
+      setEngineStatus(null);
+    }
+  }, [project]);
+
+  useEffect(() => {
+    void refreshEngineStatus();
+  }, [
+    refreshEngineStatus,
+    currentRun?.id,
+    currentRun?.currentNodeId,
+    currentRun?.steps.length,
+  ]);
+
   const syncCanvas = useCallback((workflow: Workflow) => {
-    setNodes(workflow.nodes.map(nodeToCanvasNode));
+    setNodes(workflow.nodes.map((node) => nodeToCanvasNode(node)));
     setEdges(workflow.edges.map(edgeToCanvasEdge));
     setWorkflowConfigJson(formatJson(workflow.config));
     setSelectedNodeId((currentNodeId) =>
@@ -273,7 +351,7 @@ export function WorkflowEditor({
       setError(
         loadError instanceof LoopBoardApiError
           ? loadError.message
-          : "LoopBoard could not load workflows.",
+          : "Loop Control Plane could not load workflows.",
       );
     } finally {
       setIsLoading(false);
@@ -297,10 +375,22 @@ export function WorkflowEditor({
     setConfigJson(formatJson(selectedNode.config));
   }, [selectedNode]);
 
+  useEffect(() => {
+    const activeNodeId = currentRun?.currentNodeId ?? null;
+    setNodes((prevNodes) =>
+      prevNodes.map((n) => ({
+        ...n,
+        style: n.id === activeNodeId
+          ? { outline: "3px solid #10b981", outlineOffset: "2px" }
+          : undefined,
+      }))
+    );
+  }, [currentRun?.currentNodeId]);
+
   const replaceDraftWorkflow = useCallback(
     (nextWorkflow: Workflow) => {
       setDraftWorkflow(nextWorkflow);
-      setNodes(nextWorkflow.nodes.map(nodeToCanvasNode));
+      setNodes(nextWorkflow.nodes.map((node) => nodeToCanvasNode(node)));
       setEdges(nextWorkflow.edges.map(edgeToCanvasEdge));
     },
     [],
@@ -599,7 +689,7 @@ export function WorkflowEditor({
       setError(
         saveError instanceof LoopBoardApiError
           ? saveError.message
-          : "LoopBoard could not save the workflow.",
+          : "Loop Control Plane could not save the workflow.",
       );
     } finally {
       setIsSaving(false);
@@ -631,7 +721,7 @@ export function WorkflowEditor({
         setFileValidationErrors(exportError.validationErrors);
         setError(exportError.message);
       } else {
-        setError("LoopBoard could not export the workflow.");
+        setError("Loop Control Plane could not export the workflow.");
       }
     } finally {
       setIsFileBusy(false);
@@ -689,7 +779,7 @@ export function WorkflowEditor({
         setFileValidationErrors(importError.validationErrors);
         setError(importError.message);
       } else {
-        setError("LoopBoard could not import the workflow file.");
+        setError("Loop Control Plane could not import the workflow file.");
       }
     } finally {
       setIsFileBusy(false);
@@ -722,7 +812,7 @@ export function WorkflowEditor({
       setError(
         runError instanceof LoopBoardApiError
           ? runError.message
-          : "LoopBoard could not start the workflow run.",
+          : "Loop Control Plane could not start the workflow run.",
       );
     } finally {
       setIsRunBusy(false);
@@ -730,7 +820,7 @@ export function WorkflowEditor({
   };
 
   const runAction = async (
-    action: "run-next" | "approve" | "skip-disabled" | "fail" | "resume",
+    action: "run-next" | "run-next-engine" | "approve" | "skip-disabled" | "fail" | "resume",
   ) => {
     if (!currentRun) {
       return;
@@ -747,16 +837,33 @@ export function WorkflowEditor({
         error: action === "fail" ? "Failed by workflow editor operator." : undefined,
       });
       setCurrentRun(run);
+      await refreshEngineStatus();
       setMessage(`Workflow run ${run.status}.`);
     } catch (runError) {
       setError(
         runError instanceof LoopBoardApiError
           ? runError.message
-          : "LoopBoard could not update the workflow run.",
+          : "Loop Control Plane could not update the workflow run.",
       );
     } finally {
       setIsRunBusy(false);
     }
+  };
+
+  const updateSelectedNodeExecutor = (
+    patch: {
+      backend?: ExecutorBackend;
+      argsText?: string;
+      timeoutMs?: string;
+    },
+  ) => {
+    if (!selectedNode) {
+      return;
+    }
+
+    updateSelectedNode({
+      config: applyExecutorEditorPatch(selectedNode, patch),
+    });
   };
 
   if (!project) {
@@ -1044,7 +1151,12 @@ export function WorkflowEditor({
               {currentRun ? (
                 <div className="grid gap-2">
                   <p className="text-xs leading-5 text-slate-600" data-testid="workflow-current-run">
-                    {currentRun.currentNodeId ?? "complete"} · {currentRun.steps.length} steps
+                    <span className="font-semibold text-slate-950">
+                      {currentRun.currentNodeId
+                        ? (draftWorkflow?.nodes.find((n) => n.id === currentRun.currentNodeId)?.name ?? "Unknown node")
+                        : "Complete"}
+                    </span>
+                    {" · "}{currentRun.steps.length} step{currentRun.steps.length !== 1 ? "s" : ""}
                   </p>
                   {currentRun.featureId ? (
                     <p className="border border-slate-200 bg-white p-2 text-xs leading-5 text-slate-600">
@@ -1054,23 +1166,40 @@ export function WorkflowEditor({
                         : currentRun.featureId}
                     </p>
                   ) : null}
+                  {currentRun.status === "paused" ? (
+                    <p className="border border-amber-200 bg-amber-50 p-2 text-xs font-semibold leading-5 text-amber-800">
+                      Paused — click Approve to advance
+                    </p>
+                  ) : null}
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       type="button"
                       onClick={() => void runAction("run-next")}
-                      disabled={isRunBusy}
+                      disabled={isRunBusy || currentRun.status === "paused" || currentRun.status === "completed" || currentRun.status === "failed"}
                       data-testid="workflow-run-next"
                       className="inline-flex min-h-9 items-center justify-center gap-2 border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <StepForward className="h-4 w-4" />
                       Run Next
                     </button>
+                    {showEngineRunNext ? (
+                      <button
+                        type="button"
+                        onClick={() => void runAction("run-next-engine")}
+                        disabled={isRunBusy || currentRun.status === "paused" || currentRun.status === "completed" || currentRun.status === "failed"}
+                        data-testid="workflow-run-next-engine"
+                        className="inline-flex min-h-9 items-center justify-center gap-2 border border-sky-700 bg-sky-700 px-2 text-xs font-semibold text-white hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <StepForward className="h-4 w-4" />
+                        Run Next (Engine)
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => void runAction("approve")}
-                      disabled={isRunBusy}
+                      disabled={isRunBusy || currentRun.status !== "paused"}
                       data-testid="workflow-approve"
-                      className="inline-flex min-h-9 items-center justify-center gap-2 border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="inline-flex min-h-9 items-center justify-center gap-2 border border-emerald-700 bg-emerald-700 px-2 text-xs font-semibold text-white hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <Check className="h-4 w-4" />
                       Approve
@@ -1078,7 +1207,7 @@ export function WorkflowEditor({
                     <button
                       type="button"
                       onClick={() => void runAction("skip-disabled")}
-                      disabled={isRunBusy}
+                      disabled={isRunBusy || currentRun.status === "paused"}
                       className="inline-flex min-h-9 items-center justify-center gap-2 border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:border-amber-300 hover:bg-amber-50 hover:text-amber-800 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <SkipForward className="h-4 w-4" />
@@ -1087,7 +1216,7 @@ export function WorkflowEditor({
                     <button
                       type="button"
                       onClick={() => void runAction("resume")}
-                      disabled={isRunBusy}
+                      disabled={isRunBusy || currentRun.status !== "paused"}
                       className="inline-flex min-h-9 items-center justify-center gap-2 border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <RotateCw className="h-4 w-4" />
@@ -1096,20 +1225,60 @@ export function WorkflowEditor({
                     <button
                       type="button"
                       onClick={() => void runAction("fail")}
-                      disabled={isRunBusy}
+                      disabled={isRunBusy || currentRun.status === "completed"}
                       className="col-span-2 inline-flex min-h-9 items-center justify-center gap-2 border border-red-300 bg-white px-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <XCircle className="h-4 w-4" />
                       Fail Step
                     </button>
                   </div>
+                  {currentEngineJob || currentWorkflowStep?.status === "running" ? (
+                    <div
+                      className="border border-slate-200 bg-white p-2 text-xs leading-5 text-slate-600"
+                      data-testid="workflow-engine-job-status"
+                    >
+                      <p className="font-semibold uppercase text-slate-500">
+                        Engine Job
+                      </p>
+                      {currentEngineJob ? (
+                        <>
+                          <p className="mt-1">
+                            <span className="font-semibold text-slate-950">
+                              {currentEngineJob.status}
+                            </span>
+                            {" · "}
+                            {currentEngineJob.backend}
+                            {" · "}
+                            attempt {currentEngineJob.attempt}/{currentEngineJob.maxAttempts}
+                          </p>
+                          {currentEngineJob.lastLogMessage ? (
+                            <p className="mt-1 text-slate-500">
+                              {currentEngineJob.lastLogMessage}
+                            </p>
+                          ) : null}
+                          {currentEngineJob.error ? (
+                            <p className="mt-1 text-red-700">{currentEngineJob.error}</p>
+                          ) : null}
+                        </>
+                      ) : (
+                        <p className="mt-1 text-slate-500">
+                          Step is running; waiting for engine job status.
+                        </p>
+                      )}
+                    </div>
+                  ) : null}
                   {currentRun.steps.at(-1) ? (
                     <p
                       className="border border-slate-200 bg-white p-2 text-xs leading-5 text-slate-600"
                       data-testid="workflow-last-step"
                     >
-                      Last step {currentRun.steps.at(-1)?.workflowNodeId}:{" "}
-                      {currentRun.steps.at(-1)?.status}
+                      Last:{" "}
+                      <span className="font-semibold text-slate-950">
+                        {draftWorkflow?.nodes.find(
+                          (n) => n.id === currentRun.steps.at(-1)?.workflowNodeId,
+                        )?.name ?? currentRun.steps.at(-1)?.workflowNodeId}
+                      </span>
+                      {" — "}{currentRun.steps.at(-1)?.status}
                     </p>
                   ) : null}
                 </div>
@@ -1258,6 +1427,65 @@ export function WorkflowEditor({
                     Approval
                   </label>
                 </div>
+                {selectedNodeExecutor?.automatable ? (
+                  <div
+                    className="grid gap-2 border border-slate-200 bg-white p-2"
+                    data-testid="workflow-node-executor-config"
+                  >
+                    <p className="text-xs font-semibold uppercase text-slate-500">
+                      Executor
+                    </p>
+                    <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+                      Backend
+                      <select
+                        aria-label="Executor backend"
+                        value={selectedNodeExecutor.backend}
+                        onChange={(event) =>
+                          updateSelectedNodeExecutor({
+                            backend: event.target.value as ExecutorBackend,
+                          })
+                        }
+                        className="min-h-9 border border-slate-300 bg-white px-2 text-sm font-normal normal-case text-slate-950"
+                      >
+                        {workflowExecutorBackendOptions().map((backend) => (
+                          <option key={backend} value={backend}>
+                            {compactText(backend)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+                      Args
+                      <input
+                        aria-label="Executor args"
+                        value={selectedNodeExecutor.argsText}
+                        onChange={(event) =>
+                          updateSelectedNodeExecutor({ argsText: event.target.value })
+                        }
+                        placeholder="spec, plan, tasks"
+                        className="min-h-9 border border-slate-300 bg-white px-2 font-mono text-sm font-normal normal-case text-slate-950"
+                      />
+                    </label>
+                    <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+                      Timeout (ms)
+                      <input
+                        aria-label="Executor timeout milliseconds"
+                        type="number"
+                        min={1}
+                        value={selectedNodeExecutor.timeoutMs}
+                        onChange={(event) =>
+                          updateSelectedNodeExecutor({ timeoutMs: event.target.value })
+                        }
+                        placeholder={String(
+                          selectedNodeExecutor.defaultBackend === selectedNodeExecutor.backend
+                            ? "default"
+                            : "",
+                        )}
+                        className="min-h-9 border border-slate-300 bg-white px-2 text-sm font-normal normal-case text-slate-950"
+                      />
+                    </label>
+                  </div>
+                ) : null}
                 <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
                   Input artifacts JSON
                   <textarea

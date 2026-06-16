@@ -6,6 +6,7 @@ import {
 import { ValidationError } from "@/lib/db/loopboard-repository";
 import {
   applyWorkflowRunAction,
+  runNextWorkflowStepWithEngineTick,
   type WorkflowRunAction,
 } from "@/lib/workflows/workflow-runner";
 
@@ -15,6 +16,7 @@ const workflowActionHeader = "x-loopboard-workflow-action";
 
 const workflowRunActions = new Set<WorkflowRunAction>([
   "run-next",
+  "run-next-engine",
   "approve",
   "skip-disabled",
   "fail",
@@ -70,6 +72,10 @@ export async function POST(
         !workflowRunActions.has(effectiveAction as WorkflowRunAction)
       ) {
         throw new ValidationError("Workflow run action is not supported.");
+      }
+
+      if (effectiveAction === "run-next-engine") {
+        return runNextWorkflowStepWithEngineTick({ repository, runId });
       }
 
       return applyWorkflowRunAction({

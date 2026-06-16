@@ -17,6 +17,7 @@ import {
   completeWorkflowStepFromEngineJob,
   failWorkflowRunStep,
   runNextWorkflowStep,
+  runNextWorkflowStepWithEngineTick,
   startWorkflowRun,
 } from "@/lib/workflows/workflow-runner";
 
@@ -551,5 +552,75 @@ describe("Workflow runner", () => {
       });
       assert.equal(approvedPath?.currentNodeId, "node-approved");
     });
+  });
+
+  it("run-next-engine enqueues and ticks workflow-step jobs", async () => {
+    const tempDirectory = mkdtempSync(join(tmpdir(), "loopboard-runner-engine-"));
+    const database = new DatabaseSync(join(tempDirectory, "loopboard.sqlite"));
+
+    try {
+      applyMigrations(database);
+      seedDatabase(database);
+      const repository = new LoopBoardRepository(database);
+      repository.updateAutomationSettings({ globalAutoRunEnabled: true });
+      const workflow = repository.createWorkflow({
+        id: "workflow-run-next-engine",
+        projectId: seedProject.id,
+        name: "Run Next Engine",
+        description: "Ticks enqueued workflow-step jobs.",
+        nodes: [
+          {
+            id: "node-import-tasks-engine",
+            type: "import-tasks",
+            name: "Import Tasks",
+            mode: "auto",
+            position: { x: 0, y: 0 },
+            inputArtifacts: [
+              {
+                name: "tasks",
+                path: "specs/{feature}/tasks.md",
+                required: true,
+              },
+            ],
+            outputArtifacts: [
+              {
+                name: "loopboard-tasks",
+                path: "loopboard://feature/{feature}/tasks",
+                required: true,
+              },
+            ],
+            requireApproval: false,
+            maxRetries: 1,
+            riskPolicy: "low",
+            config: {},
+            currentState: "idle",
+          },
+        ],
+        edges: [],
+      });
+      const run = startWorkflowRun({
+        repository,
+        input: { workflowId: workflow.id, featureId: seedFeatures[0].id },
+      });
+
+      const updated = await runNextWorkflowStepWithEngineTick({
+        repository,
+        runId: run.id,
+      });
+      const job = repository
+        .listEngineJobs()
+        .find((entry) => entry.workflowRunId === run.id);
+
+      assert.ok(job);
+      assert.ok(
+        job!.executionLogs.some((entry) =>
+          /dequeued|failed|completed|Engine job/u.test(entry.message),
+        ),
+      );
+      assert.ok(updated.steps[0]?.status === "running" || updated.steps[0]?.status === "failed");
+    } finally {
+      database.close();
+      rmSync(tempDirectory, { recursive: true, force: true });
+    }
   });
 });
