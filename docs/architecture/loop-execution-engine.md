@@ -10,13 +10,15 @@ tags:
 related:
   - '[[Workflow-Editor-Runner]]'
   - '[[Workflow-Node-Executors]]'
+  - '[[Spec-Kit-Importer]]'
+  - '[[GitHub-Issue-Bridge]]'
   - '[[Risk-Policy]]'
   - '[[Security-Policy]]'
 ---
 
 # Loop Execution Engine
 
-Phase 01 adds a hybrid loop execution engine to Loop Control Plane. An in-app scheduler dequeues persisted jobs from SQLite, resolves a pluggable executor backend, and records redacted execution logs. Heavy work is delegated to executor implementations; today only the built-in `stub` backend runs. The workflow graph runner in [[Workflow-Editor-Runner]] remains the state machine for workflow nodes — the engine is the job queue and execution layer that will eventually back `workflow-step` and `task-run` work.
+Phase 01 adds a hybrid loop execution engine to Loop Control Plane. An in-app scheduler dequeues persisted jobs from SQLite, resolves a pluggable executor backend, and records redacted execution logs. Heavy work is delegated to executor implementations. Phase 03 wires the workflow graph runner in [[Workflow-Editor-Runner]] to enqueue `workflow-step` jobs that invoke real node executors (Spec Kit CLI, task import, GitHub delivery, test runs, AI review stubs) through the engine queue.
 
 Automation gates from [[Risk-Policy]] and trusted-input boundaries from [[Security-Policy]] apply before any automated scheduler tick. Global auto-run stays off by default.
 
@@ -55,9 +57,9 @@ The scheduler is not a separate daemon. It runs inside the Next.js Node process 
 
 Backends are declared in `lib/engine/loop-engine-types.ts`:
 
-| Backend | Phase 01 status | Purpose |
-|---------|-----------------|---------|
-| `stub` | **Implemented** | Deterministic completion for demo jobs and tests |
+| Backend | Phase 01 status | Phase 03 usage |
+|---------|-----------------|----------------|
+| `stub` | **Implemented** | Default backend for demo jobs, workflow-step dispatch, and deterministic test doubles |
 | `cursor` | Reserved | Future Cursor CLI / SDK adapter |
 | `claude-code` | Reserved | Future Claude Code CLI adapter |
 | `codex` | Reserved | Future Codex CLI adapter |
@@ -87,11 +89,11 @@ Helpers `readExecutorConfig`, `validateExecutorConfig`, and `withExecutorConfig`
 
 ### Job kinds
 
-| Kind | Phase 01 usage |
-|------|----------------|
+| Kind | Usage |
+|------|-------|
 | `demo-ping` | Dashboard **Run Demo Job** — stub backend smoke test |
 | `task-run` | Reserved — future task-scoped executor runs |
-| `workflow-step` | Reserved — future bridge from workflow runner to engine |
+| `workflow-step` | **Implemented (Phase 03)** — bridge from workflow runner to node executors |
 
 ### Job statuses
 
@@ -168,6 +170,45 @@ The **Loop Engine** panel on the project dashboard (`app/page.tsx`) shows:
 
 Controls: **Run Demo Job**, **Tick Once**, **Start Scheduler**, **Stop Scheduler**. Status polls every 3 seconds while the dashboard is open.
 
+The workflow runner panel also shows the latest engine job for the current workflow step and exposes **Run Next Step (Engine)** when global auto-run is off (see [[Workflow-Editor-Runner]]).
+
+## Workflow Executors
+
+Phase 03 connects the graph runner to the engine queue. When automation policy allows (including after human approval on semi nodes), `runNextWorkflowStep` enqueues `workflow-step` jobs instead of completing automatable nodes inline. Steps enter `running` status until `LoopScheduler.tick` finishes the job and calls `completeWorkflowStepFromEngineJob`, which links artifacts, appends feature/task events, and advances the graph (including conditional edges via `branchLabel` from executors such as `ai-review`).
+
+```mermaid
+sequenceDiagram
+  participant Runner as Workflow Runner
+  participant SQLite as engine_jobs
+  participant Scheduler as LoopScheduler
+  participant Dispatcher as workflow-step-dispatcher
+  participant Executor as Node Executor
+
+  Runner->>SQLite: enqueue workflow-step job
+  Runner->>Runner: step status running
+  Scheduler->>SQLite: dequeue job
+  Scheduler->>Dispatcher: StubExecutor workflowStepHandler
+  Dispatcher->>Executor: spec-kit / import / GitHub / tests / review
+  Executor-->>Scheduler: success + outputArtifacts
+  Scheduler->>Runner: completeWorkflowStepFromEngineJob
+  Runner->>Runner: advance currentNodeId
+```
+
+| Node type | Executor module | Reuses |
+|-----------|-----------------|--------|
+| `spec-kit-actions` | `lib/engine/executors/spec-kit-actions-executor.ts` | Spec Kit CLI via `process-runner` |
+| `import-tasks` | `lib/engine/executors/import-tasks-executor.ts` | [[Spec-Kit-Importer]] |
+| `create-github-issues` | `lib/engine/executors/create-github-issues-executor.ts` | [[GitHub-Issue-Bridge]] |
+| `open-pr` | `lib/engine/executors/open-pr-executor.ts` | [[GitHub-Issue-Bridge]] PR helpers |
+| `run-tests` | `lib/engine/executors/run-tests-executor.ts` | `process-runner` npm-test profile |
+| `ai-review` | `lib/engine/executors/ai-review-executor.ts` | Stub review backend; `branchLabel` for edges |
+
+Approval-gate nodes (`human-input`, `human-review`, `manual-claude-code-edit`, `merge`) still pause for operator approval. Executors prepare context but never bypass `evaluateWorkflowNodePolicy`. External and GitHub-derived artifacts are tagged `[external/untrusted]` per [[Security-Policy]].
+
+Subprocess safety (allowlisted commands, cwd validation, timeouts, redacted logs) lives in `lib/engine/process-runner.ts`. Full node mapping, config schema, and editor UI are documented in [[Workflow-Node-Executors]].
+
+Verification: `npm run db:migrate`, `npm run lint`, `npm run typecheck`, and `npm test` (228 tests). Feature Development Loop walkthrough coverage lives in `tests/workflow-executor-verification.test.ts` (human-input → spec-kit-actions with mocked CLI → human-review → import-tasks, confirming board tasks and workflow events).
+
 ## Key Source Files
 
 | Path | Role |
@@ -178,23 +219,28 @@ Controls: **Run Demo Job**, **Tick Once**, **Start Scheduler**, **Stop Scheduler
 | `lib/engine/scheduler-interval.ts` | Process-memory background tick interval |
 | `lib/api/engine-actions.ts` | Status aggregation and route action handlers |
 | `app/api/engine/**` | HTTP route handlers |
+| `lib/engine/executors/workflow-step-dispatcher.ts` | Routes `workflow-step` jobs to node executors |
+| `lib/engine/process-runner.ts` | Audited subprocess execution for CLIs |
+| `lib/workflows/workflow-runner.ts` | Graph state machine; enqueues engine jobs |
 | `tests/loop-engine-*.test.ts` | Types, scheduler, repository, API coverage |
+| `tests/workflow-engine-integration.test.ts` | Trimmed import-tasks → create-github-issues engine path |
+| `tests/workflow-executor-verification.test.ts` | Feature Development Loop walkthrough verification |
 
-## Intentional Non-Goals (Phase 01)
+## Intentional Non-Goals (remaining)
 
-Phase 01 is a **foundation skeleton**, not full autonomous loop execution:
-
-- **No real CLI invocation** — Cursor, Claude Code, Codex, and Agent Orchestrator backends are typed and validated but not implemented.
-- **No workflow runner integration** — `workflow-step` jobs are not enqueued from the graph runner yet.
+- **No real agent CLI backends yet** — Cursor, Claude Code, Codex, and Agent Orchestrator backends are typed and validated but adapters are Phase 04 work.
 - **No task-run automation** — Task cards do not auto-spawn engine jobs.
 - **No global auto-run by default** — Operators must explicitly enable automation before the scheduler runs unattended.
 - **No distributed queue** — Single-process SQLite queue; no Redis, no multi-instance coordination.
 
-Future phases will register real executors following the narrow adapter pattern from `lib/system/local-command-runner.ts`, wire workflow nodes to `workflow-step` jobs, and connect task context handoff artifacts to `task-run` execution. See [[Workflow-Node-Executors]] for the Phase 03 node-type mapping and config schema.
+Future phases will register real agent executors, wire `task-run` jobs to task context handoff artifacts, and extend review/implementation backends. See [[Workflow-Node-Executors]] for the Phase 03 node-type mapping and config schema.
 
 ## Related Documents
 
-- [[Workflow-Editor-Runner]] — graph runner that remains separate from engine job execution
+- [[Workflow-Editor-Runner]] — graph runner, approval gates, runner panel engine controls
+- [[Workflow-Node-Executors]] — per-node executor modules, process runner, config schema
+- [[Spec-Kit-Importer]] — task import reuse for `import-tasks` workflow steps
+- [[GitHub-Issue-Bridge]] — issue and PR helpers for delivery nodes
 - [[Risk-Policy]] — global auto-run defaults and risk gates
 - [[Security-Policy]] — token handling and trusted-input rules
 - [[loop-engine-execution-boundaries]] — Phase 01 inspection notes on reuse boundaries
