@@ -1,0 +1,384 @@
+{
+  "id": "workflow-feature-development-loop",
+  "projectId": "project-loopboard",
+  "name": "Feature Development Loop",
+  "description": "PRD-aligned feature workflow from human intake through Spec Kit artifacts, task import, AI implementation, review, pull request, and merge.",
+  "version": 1,
+  "nodes": [
+    {
+      "id": "node-human-input",
+      "workflowId": "workflow-feature-development-loop",
+      "type": "human-input",
+      "name": "Human Input",
+      "mode": "human",
+      "position": { "x": 0, "y": 120 },
+      "inputArtifacts": [],
+      "outputArtifacts": [
+        { "name": "feature-brief", "path": "specs/{feature}/PRD.md", "required": true }
+      ],
+      "requireApproval": true,
+      "maxRetries": 0,
+      "riskPolicy": "manual-only",
+      "config": {},
+      "currentState": "idle"
+    },
+    {
+      "id": "node-spec-kit-actions",
+      "workflowId": "workflow-feature-development-loop",
+      "type": "spec-kit-actions",
+      "name": "Spec Kit Actions",
+      "mode": "semi",
+      "position": { "x": 260, "y": 120 },
+      "inputArtifacts": [
+        { "name": "feature-brief", "path": "specs/{feature}/PRD.md", "required": true }
+      ],
+      "outputArtifacts": [
+        { "name": "spec", "path": "specs/{feature}/spec.md", "required": true },
+        { "name": "plan", "path": "specs/{feature}/plan.md", "required": true },
+        { "name": "tasks", "path": "specs/{feature}/tasks.md", "required": true }
+      ],
+      "requireApproval": true,
+      "maxRetries": 1,
+      "riskPolicy": "medium",
+      "config": {},
+      "currentState": "idle"
+    },
+    {
+      "id": "node-human-review",
+      "workflowId": "workflow-feature-development-loop",
+      "type": "human-review",
+      "name": "Human Review",
+      "mode": "human",
+      "position": { "x": 520, "y": 120 },
+      "inputArtifacts": [
+        { "name": "spec", "path": "specs/{feature}/spec.md", "required": true },
+        { "name": "plan", "path": "specs/{feature}/plan.md", "required": true },
+        { "name": "tasks", "path": "specs/{feature}/tasks.md", "required": true }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "approved-artifacts",
+          "path": "loopboard://feature/{feature}/approvals",
+          "required": true
+        }
+      ],
+      "requireApproval": true,
+      "maxRetries": 0,
+      "riskPolicy": "manual-only",
+      "config": {},
+      "currentState": "idle"
+    },
+    {
+      "id": "node-import-tasks",
+      "workflowId": "workflow-feature-development-loop",
+      "type": "import-tasks",
+      "name": "Import Tasks",
+      "mode": "semi",
+      "position": { "x": 780, "y": 120 },
+      "inputArtifacts": [
+        { "name": "tasks", "path": "specs/{feature}/tasks.md", "required": true }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "loopboard-tasks",
+          "path": "loopboard://feature/{feature}/tasks",
+          "required": true
+        }
+      ],
+      "requireApproval": true,
+      "maxRetries": 1,
+      "riskPolicy": "low",
+      "config": {},
+      "currentState": "idle"
+    },
+    {
+      "id": "node-create-github-issues",
+      "workflowId": "workflow-feature-development-loop",
+      "type": "create-github-issues",
+      "name": "Create GitHub Issues",
+      "mode": "semi",
+      "position": { "x": 1040, "y": 120 },
+      "inputArtifacts": [
+        {
+          "name": "loopboard-tasks",
+          "path": "loopboard://feature/{feature}/tasks",
+          "required": true
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "github-issues",
+          "path": "https://github.com/{repository}/issues",
+          "required": true
+        }
+      ],
+      "requireApproval": true,
+      "maxRetries": 1,
+      "riskPolicy": "medium",
+      "config": {},
+      "currentState": "idle"
+    },
+    {
+      "id": "node-agent-orchestrator-implement",
+      "workflowId": "workflow-feature-development-loop",
+      "type": "agent-orchestrator-implement",
+      "name": "Agent Orchestrator Implement",
+      "mode": "auto",
+      "position": { "x": 1300, "y": 120 },
+      "inputArtifacts": [
+        {
+          "name": "github-issues",
+          "path": "https://github.com/{repository}/issues",
+          "required": true
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "implementation-branch",
+          "path": "git://{repository}/{branch}",
+          "required": true
+        }
+      ],
+      "requireApproval": false,
+      "maxRetries": 2,
+      "riskPolicy": "medium",
+      "config": {},
+      "currentState": "idle"
+    },
+    {
+      "id": "node-run-tests",
+      "workflowId": "workflow-feature-development-loop",
+      "type": "run-tests",
+      "name": "Run Tests",
+      "mode": "auto",
+      "position": { "x": 1560, "y": 120 },
+      "inputArtifacts": [
+        {
+          "name": "implementation-branch",
+          "path": "git://{repository}/{branch}",
+          "required": true
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "test-report",
+          "path": "loopboard://runs/{run}/test-report",
+          "required": true
+        }
+      ],
+      "requireApproval": false,
+      "maxRetries": 2,
+      "riskPolicy": "medium",
+      "config": {},
+      "currentState": "idle"
+    },
+    {
+      "id": "node-ai-review",
+      "workflowId": "workflow-feature-development-loop",
+      "type": "ai-review",
+      "name": "AI Review",
+      "mode": "semi",
+      "position": { "x": 1820, "y": 120 },
+      "inputArtifacts": [
+        {
+          "name": "implementation-branch",
+          "path": "git://{repository}/{branch}",
+          "required": true
+        },
+        {
+          "name": "test-report",
+          "path": "loopboard://runs/{run}/test-report",
+          "required": true
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "review-notes",
+          "path": "loopboard://runs/{run}/review-notes",
+          "required": true
+        }
+      ],
+      "requireApproval": true,
+      "maxRetries": 0,
+      "riskPolicy": "medium",
+      "config": {},
+      "currentState": "idle"
+    },
+    {
+      "id": "node-manual-claude-code-edit",
+      "workflowId": "workflow-feature-development-loop",
+      "type": "manual-claude-code-edit",
+      "name": "Manual Claude Code Edit",
+      "mode": "human",
+      "position": { "x": 1820, "y": 320 },
+      "inputArtifacts": [
+        {
+          "name": "review-notes",
+          "path": "loopboard://runs/{run}/review-notes",
+          "required": true
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "manual-patch",
+          "path": "git://{repository}/{branch}",
+          "required": true
+        }
+      ],
+      "requireApproval": true,
+      "maxRetries": 0,
+      "riskPolicy": "manual-only",
+      "config": { "optional": true },
+      "currentState": "idle"
+    },
+    {
+      "id": "node-open-pr",
+      "workflowId": "workflow-feature-development-loop",
+      "type": "open-pr",
+      "name": "Open PR",
+      "mode": "semi",
+      "position": { "x": 2080, "y": 120 },
+      "inputArtifacts": [
+        {
+          "name": "implementation-branch",
+          "path": "git://{repository}/{branch}",
+          "required": true
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "pull-request",
+          "path": "https://github.com/{repository}/pulls",
+          "required": true
+        }
+      ],
+      "requireApproval": true,
+      "maxRetries": 1,
+      "riskPolicy": "medium",
+      "config": {},
+      "currentState": "idle"
+    },
+    {
+      "id": "node-merge",
+      "workflowId": "workflow-feature-development-loop",
+      "type": "merge",
+      "name": "Merge",
+      "mode": "human",
+      "position": { "x": 2340, "y": 120 },
+      "inputArtifacts": [
+        {
+          "name": "pull-request",
+          "path": "https://github.com/{repository}/pulls",
+          "required": true
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "merged-branch",
+          "path": "git://{repository}/{defaultBranch}",
+          "required": true
+        }
+      ],
+      "requireApproval": true,
+      "maxRetries": 0,
+      "riskPolicy": "manual-only",
+      "config": {},
+      "currentState": "idle"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-node-human-input-to-node-spec-kit-actions",
+      "workflowId": "workflow-feature-development-loop",
+      "sourceNodeId": "node-human-input",
+      "targetNodeId": "node-spec-kit-actions",
+      "label": "next",
+      "condition": {}
+    },
+    {
+      "id": "edge-node-spec-kit-actions-to-node-human-review",
+      "workflowId": "workflow-feature-development-loop",
+      "sourceNodeId": "node-spec-kit-actions",
+      "targetNodeId": "node-human-review",
+      "label": "next",
+      "condition": {}
+    },
+    {
+      "id": "edge-node-human-review-to-node-import-tasks",
+      "workflowId": "workflow-feature-development-loop",
+      "sourceNodeId": "node-human-review",
+      "targetNodeId": "node-import-tasks",
+      "label": "next",
+      "condition": {}
+    },
+    {
+      "id": "edge-node-import-tasks-to-node-create-github-issues",
+      "workflowId": "workflow-feature-development-loop",
+      "sourceNodeId": "node-import-tasks",
+      "targetNodeId": "node-create-github-issues",
+      "label": "next",
+      "condition": {}
+    },
+    {
+      "id": "edge-node-create-github-issues-to-node-agent-orchestrator-implement",
+      "workflowId": "workflow-feature-development-loop",
+      "sourceNodeId": "node-create-github-issues",
+      "targetNodeId": "node-agent-orchestrator-implement",
+      "label": "next",
+      "condition": {}
+    },
+    {
+      "id": "edge-node-agent-orchestrator-implement-to-node-run-tests",
+      "workflowId": "workflow-feature-development-loop",
+      "sourceNodeId": "node-agent-orchestrator-implement",
+      "targetNodeId": "node-run-tests",
+      "label": "next",
+      "condition": {}
+    },
+    {
+      "id": "edge-node-run-tests-to-node-ai-review",
+      "workflowId": "workflow-feature-development-loop",
+      "sourceNodeId": "node-run-tests",
+      "targetNodeId": "node-ai-review",
+      "label": "next",
+      "condition": {}
+    },
+    {
+      "id": "edge-node-ai-review-to-node-open-pr",
+      "workflowId": "workflow-feature-development-loop",
+      "sourceNodeId": "node-ai-review",
+      "targetNodeId": "node-open-pr",
+      "label": "approved",
+      "condition": {}
+    },
+    {
+      "id": "edge-node-ai-review-to-node-manual-claude-code-edit",
+      "workflowId": "workflow-feature-development-loop",
+      "sourceNodeId": "node-ai-review",
+      "targetNodeId": "node-manual-claude-code-edit",
+      "label": "needs changes",
+      "condition": {}
+    },
+    {
+      "id": "edge-node-manual-claude-code-edit-to-node-run-tests",
+      "workflowId": "workflow-feature-development-loop",
+      "sourceNodeId": "node-manual-claude-code-edit",
+      "targetNodeId": "node-run-tests",
+      "label": "retry",
+      "condition": {}
+    },
+    {
+      "id": "edge-node-open-pr-to-node-merge",
+      "workflowId": "workflow-feature-development-loop",
+      "sourceNodeId": "node-open-pr",
+      "targetNodeId": "node-merge",
+      "label": "next",
+      "condition": {}
+    }
+  ],
+  "config": {
+    "defaultFeatureId": "feature-kanban-control-plane",
+    "pauseOnHumanNodes": true,
+    "redactSecretsInLogs": true
+  }
+}
