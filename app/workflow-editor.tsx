@@ -866,20 +866,18 @@ export function WorkflowEditor({
     const source = (connection as Connection).source ?? (connection as Edge).source;
     const target = (connection as Connection).target ?? (connection as Edge).target;
     if (!source || !target) return false;
-    // No self-loops
     if (source === target) return false;
-    // No duplicate edges
-    if (draftWorkflow?.edges.some(e => e.sourceNodeId === source && e.targetNodeId === target)) return false;
-    if (draftWorkflow) {
-      const sourceNode = draftWorkflow.nodes.find(n => n.id === source);
-      // Human nodes: max 2 outputs (approve/reject branching)
-      // Agent nodes (auto/semi): max 1 output
-      const maxOutputs = sourceNode?.mode === "human" ? 2 : 1;
-      const outgoing = draftWorkflow.edges.filter(e => e.sourceNodeId === source).length;
-      if (outgoing >= maxOutputs) return false;
-    }
+    // Use ref (always current) rather than draftWorkflow state which may be stale
+    // during rapid interactions before React re-renders.
+    const wf = draftWorkflowRef.current;
+    if (!wf) return true;
+    if (wf.edges.some(e => e.sourceNodeId === source && e.targetNodeId === target)) return false;
+    const sourceNode = wf.nodes.find(n => n.id === source);
+    const maxOutputs = sourceNode?.mode === "human" ? 2 : 1;
+    const outgoing = wf.edges.filter(e => e.sourceNodeId === source).length;
+    if (outgoing >= maxOutputs) return false;
     return true;
-  }, [draftWorkflow]);
+  }, []);
 
   const onConnect = useCallback((connection: Connection) => {
     if (draftWorkflowRef.current) pushToHistory(draftWorkflowRef.current);
@@ -938,17 +936,13 @@ export function WorkflowEditor({
 
     setDraftWorkflow((currentWorkflow) => {
       if (!currentWorkflow) return currentWorkflow;
-      const newId = normalizeWorkflowEdge({
-        workflowId: currentWorkflow.id,
-        sourceNodeId: newConnection.source!,
-        targetNodeId: newConnection.target!,
-      }).id;
       return {
         ...currentWorkflow,
         edges: currentWorkflow.edges.map((edge) =>
+          // Keep edge.id unchanged — canvas uses oldEdge.id so they must stay in sync.
+          // Changing the ID here would cause onEdgesChange to fail to find the edge on delete.
           edge.id !== oldEdge.id ? edge : {
             ...edge,
-            id: newId,
             sourceNodeId: newConnection.source!,
             targetNodeId: newConnection.target!,
             updatedAt: new Date().toISOString(),
@@ -1559,7 +1553,7 @@ export function WorkflowEditor({
               nodeTypes={nodeTypes}
               edgeTypes={edgeTypes}
               connectionMode={ConnectionMode.Loose}
-              reconnectRadius={20}
+              reconnectRadius={8}
               fitView
             >
               <Background color="#c8c4ba" gap={24} size={1.5} />
