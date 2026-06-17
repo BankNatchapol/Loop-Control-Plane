@@ -218,10 +218,11 @@ const SketchNode = ({ data, selected }: NodeProps<Node<WorkflowCanvasNodeData>>)
       </div>
       {data.active && (
         <div style={{
-          position: "absolute", top: -7, right: -7,
-          width: 14, height: 14, borderRadius: "50%",
+          position: "absolute", top: 4, right: 4,
+          width: 10, height: 10, borderRadius: "50%",
           background: "#86a87d", border: "2px solid #4a7340",
-          zIndex: 11,
+          zIndex: 5,
+          pointerEvents: "none",
         }} />
       )}
       <Handle id="left"   type="source" position={Position.Left}   isConnectable isConnectableStart isConnectableEnd style={{ ...handleStyle, left: -7 }} />
@@ -1566,7 +1567,7 @@ export function WorkflowEditor({
               nodeTypes={nodeTypes}
               edgeTypes={edgeTypes}
               connectionMode={ConnectionMode.Loose}
-              reconnectRadius={8}
+              reconnectRadius={15}
               fitView
             >
               <Background color="#c8c4ba" gap={24} size={1.5} />
