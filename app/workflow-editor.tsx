@@ -109,7 +109,7 @@ import {
   workflowNodeExecutorRuntimeHint,
 } from "@/lib/workflows/workflow-executor-editor";
 
-type WorkflowCanvasNodeData = { label: string; mode: WorkflowNodeMode; type: string; group?: string; active?: boolean };
+type WorkflowCanvasNodeData = { label: string; mode: WorkflowNodeMode; type: string; group?: string; steps?: string[]; active?: boolean };
 
 const compactText = (value: string) => value.replaceAll("-", " ");
 
@@ -163,6 +163,18 @@ const CATALOG_GROUPS: CatalogGroup[] = [
 const TYPE_TO_GROUP: Record<string, CatalogGroup> = {};
 CATALOG_GROUPS.forEach(g => g.functions.forEach(f => { TYPE_TO_GROUP[f.type] = g; }));
 
+const AO_STEPS = [
+  "Spawn agent per GitHub issue",
+  "Own worktree + branch per agent",
+  "Implement & self-fix CI failures",
+  "Open PR + address review comments",
+  "Pause when human judgment needed",
+];
+
+const NODE_STEPS: Partial<Record<string, string[]>> = {
+  "agent-orchestrator-implement": AO_STEPS,
+};
+
 const nodeToCanvasNode = (
   node: WorkflowNode,
   activeNodeId?: string | null,
@@ -175,6 +187,7 @@ const nodeToCanvasNode = (
     mode: node.mode,
     type: node.type,
     group: TYPE_TO_GROUP[node.type]?.label,
+    steps: NODE_STEPS[node.type],
     active: node.id === activeNodeId,
   },
 });
@@ -263,6 +276,16 @@ const SketchNode = ({ data, selected }: NodeProps<Node<WorkflowCanvasNodeData>>)
       <div style={{ fontSize: 14, fontWeight: 600, color: "#23221f", lineHeight: 1.3 }}>
         {data.label}
       </div>
+      {data.steps && (
+        <ul style={{ margin: "7px 0 0", padding: 0, listStyle: "none", textAlign: "left", borderTop: `1px dashed ${m.border}`, paddingTop: 6 }}>
+          {data.steps.map((step, i) => (
+            <li key={i} style={{ fontSize: 10, color: m.labelColor, lineHeight: 1.55, display: "flex", alignItems: "flex-start", gap: 4 }}>
+              <span style={{ opacity: 0.55, minWidth: 12, fontVariantNumeric: "tabular-nums" }}>{i + 1}.</span>
+              <span>{step}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       {data.active && (
         <div style={{
           position: "absolute", top: 4, right: 4,
