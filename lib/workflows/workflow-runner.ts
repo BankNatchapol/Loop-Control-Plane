@@ -175,7 +175,16 @@ const nextNodeId = (
   }
 
   const unlabeled = outgoing.find((edge) => edge.label.trim().length === 0);
-  return (unlabeled ?? outgoing[0])?.targetNodeId;
+  if (unlabeled) return unlabeled.targetNodeId;
+
+  // When no branch label is given, prefer forward-flow edges over explicit loop-back
+  // labels ("needs more", "needs changes", "retry", etc.) so that human-gate approval
+  // without a branch selection always follows the happy path.
+  const LOOP_BACK_LABELS = new Set(["needs more", "needs changes", "retry", "rejected"]);
+  const forward = outgoing.find(
+    (edge) => !LOOP_BACK_LABELS.has(normalizeBranchLabel(edge.label)),
+  );
+  return (forward ?? outgoing[0])?.targetNodeId;
 };
 
 const findCurrentNode = (workflow: Workflow, run: WorkflowRun): WorkflowNode => {
