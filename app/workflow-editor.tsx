@@ -254,13 +254,62 @@ const opsToD = (ops: Array<{ op: string; data: number[] }>): string =>
     return "";
   }).filter(Boolean).join(" ");
 
+// getBezierPath collapses to a straight line when the control-point offsets are
+// zero — this happens when source and target are at the same height (dy≈0) for
+// horizontal handles, or at the same position for same-direction handles.
+// This wrapper forces a minimum arc so the sketch aesthetic always shows a curve.
+const MIN_ARC = 44;
+const getSketchEdgePath = (
+  sourceX: number, sourceY: number, sourcePosition: Position,
+  targetX: number, targetY: number, targetPosition: Position,
+): [string, number, number] => {
+  const dx = targetX - sourceX;
+  const dy = targetY - sourceY;
+  const mx = (sourceX + targetX) / 2;
+  const my = (sourceY + targetY) / 2;
+
+  // Horizontal handles (right→left or left→right) at nearly the same height
+  if (
+    ((sourcePosition === Position.Right && targetPosition === Position.Left) ||
+     (sourcePosition === Position.Left  && targetPosition === Position.Right)) &&
+    Math.abs(dy) < MIN_ARC
+  ) {
+    const bump = (MIN_ARC - Math.abs(dy) * 0.5) * (dx >= 0 ? -1 : 1);
+    const c1x = sourceX + dx * 0.35;
+    const c2x = targetX - dx * 0.35;
+    return [
+      `M ${sourceX} ${sourceY} C ${c1x} ${sourceY + bump} ${c2x} ${targetY + bump} ${targetX} ${targetY}`,
+      mx, my + bump * 0.5,
+    ];
+  }
+
+  // Same-direction handles (bottom→bottom, top→top) — always need explicit arc
+  if (sourcePosition === Position.Bottom && targetPosition === Position.Bottom) {
+    const bump = Math.max(MIN_ARC, Math.abs(dy) * 0.4);
+    return [
+      `M ${sourceX} ${sourceY} C ${sourceX} ${sourceY + bump} ${targetX} ${targetY + bump} ${targetX} ${targetY}`,
+      mx, my + bump,
+    ];
+  }
+  if (sourcePosition === Position.Top && targetPosition === Position.Top) {
+    const bump = Math.max(MIN_ARC, Math.abs(dy) * 0.4);
+    return [
+      `M ${sourceX} ${sourceY} C ${sourceX} ${sourceY - bump} ${targetX} ${targetY - bump} ${targetX} ${targetY}`,
+      mx, my - bump,
+    ];
+  }
+
+  const [path, lx, ly] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
+  return [path, lx, ly] as [string, number, number];
+};
+
 const SketchEdge = ({
   id, source, sourceX, sourceY, targetX, targetY,
   sourcePosition, targetPosition, selected, animated,
 }: EdgeProps) => {
   const { onToggleDashed, getOutputCount } = useContext(EdgeActionsContext);
   const outputCount = getOutputCount(source);
-  const [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
+  const [edgePath, labelX, labelY] = getSketchEdgePath(sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition);
   const stroke = selected ? "#6f97c7" : "#23221f";
 
   const paths = useMemo(() => {
