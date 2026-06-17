@@ -6,14 +6,20 @@ import {
   applyNodeChanges,
   Background,
   Controls,
+  getBezierPath,
+  Handle,
   MiniMap,
+  Position,
   ReactFlow,
   type Connection,
   type Edge,
   type EdgeChange,
+  type EdgeProps,
   type Node,
   type NodeChange,
+  type NodeProps,
 } from "@xyflow/react";
+import rough from "roughjs";
 import clsx from "clsx";
 import {
   AlertTriangle,
@@ -37,14 +43,20 @@ import {
   createProjectWorkflow,
   exportWorkflow,
   applyWorkflowRunAction,
+  fetchEngineJobDetail,
   fetchEngineStatus,
+  fetchWorkflowRun,
   fetchProjectWorkflows,
   importProjectWorkflow,
   startWorkflowRun,
+  tickEngine,
   updateWorkflow,
   LoopBoardApiError,
 } from "@/lib/api/loopboard-client";
-import type { EngineStatusResponse } from "@/lib/api/engine-actions";
+import type {
+  EngineJobDetail,
+  EngineStatusResponse,
+} from "@/lib/api/engine-actions";
 import type {
   ExecutorBackend,
 } from "@/lib/engine/loop-engine-types";
@@ -86,14 +98,17 @@ import {
   executorBackendSupportsModel,
   extractEngineJobIdFromWorkflowStep,
   readExecutorEditorState,
+  workflowExecutorBackendLabel,
   workflowExecutorBackendOptions,
   workflowNodeExecutorPolicyWarnings,
+  workflowNodeExecutorRuntimeHint,
 } from "@/lib/workflows/workflow-executor-editor";
 
 type WorkflowCanvasNodeData = {
   label: string;
   mode: WorkflowNodeMode;
   type: string;
+  active?: boolean;
 };
 
 const compactText = (value: string) => value.replaceAll("-", " ");
@@ -103,22 +118,16 @@ const nodeToCanvasNode = (
   activeNodeId?: string | null,
 ): Node<WorkflowCanvasNodeData> => ({
   id: node.id,
+  type: "sketch",
   position: node.position,
+  sourcePosition: Position.Right,
+  targetPosition: Position.Left,
   data: {
     label: node.name,
     mode: node.mode,
     type: node.type,
+    active: node.id === activeNodeId,
   },
-  className: clsx(
-    "!rounded-none !border-2 !px-3 !py-2 !text-xs !font-semibold !shadow-sm",
-    node.mode === "auto" && "!border-sky-300 !bg-sky-50 !text-sky-900",
-    node.mode === "human" && "!border-amber-300 !bg-amber-50 !text-amber-900",
-    node.mode === "semi" && "!border-violet-300 !bg-violet-50 !text-violet-900",
-    node.mode === "disabled" && "!border-slate-300 !bg-slate-100 !text-slate-500",
-  ),
-  style: node.id === activeNodeId
-    ? { outline: "3px solid #10b981", outlineOffset: "2px" }
-    : undefined,
 });
 
 const edgeToCanvasEdge = (edge: WorkflowEdge): Edge => ({
@@ -128,6 +137,111 @@ const edgeToCanvasEdge = (edge: WorkflowEdge): Edge => ({
   label: edge.label || undefined,
   animated: edge.label === "retry",
 });
+
+// ===== Sketch canvas components =====
+
+const SKETCH_MODE: Record<WorkflowNodeMode, { border: string; bg: string; labelColor: string }> = {
+  auto:     { border: "#6f97c7", bg: "#eaf1fb", labelColor: "#3a5f96" },
+  human:    { border: "#d3a64e", bg: "#fbf2dd", labelColor: "#9a6a1c" },
+  semi:     { border: "#8e7bbf", bg: "#efeafb", labelColor: "#5a4b8f" },
+  disabled: { border: "#9a978f", bg: "#f5f4f1", labelColor: "#6f6d67" },
+};
+
+const SketchNode = ({ data, selected }: NodeProps<Node<WorkflowCanvasNodeData>>) => {
+  const m = SKETCH_MODE[data.mode as WorkflowNodeMode] ?? SKETCH_MODE.disabled;
+  const borderColor = data.active ? "#86a87d" : selected ? "#6f97c7" : m.border;
+  const bg = data.active ? "#eef5ea" : m.bg;
+  const shadow = data.active
+    ? "0 0 0 3px rgba(134,168,125,0.35), 3px 4px 0 rgba(35,34,31,0.10)"
+    : selected
+      ? "0 0 0 3px rgba(111,151,199,0.3)"
+      : "3px 4px 0 rgba(35,34,31,0.10)";
+
+  return (
+    <div style={{
+      borderRadius: "14px 11px 15px 12px / 12px 15px 11px 14px",
+      border: `2px solid ${borderColor}`,
+      boxShadow: shadow,
+      background: bg,
+      padding: "10px 16px",
+      fontFamily: "var(--font-hand)",
+      minWidth: 130,
+      textAlign: "center",
+      position: "relative",
+      transition: "box-shadow 0.15s, border-color 0.15s",
+    }}>
+      <Handle type="target" position={Position.Left}
+        style={{ background: borderColor, border: `2px solid ${borderColor}`, width: 10, height: 10, left: -6 }} />
+      <Handle type="target" position={Position.Top}
+        style={{ background: borderColor, border: `2px solid ${borderColor}`, width: 10, height: 10, top: -6 }} />
+      <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", color: m.labelColor, marginBottom: 3 }}>
+        {compactText(data.type)}
+      </div>
+      <div style={{ fontSize: 14, fontWeight: 600, color: "#23221f", lineHeight: 1.3 }}>
+        {data.label}
+      </div>
+      {data.active && (
+        <div style={{
+          position: "absolute", top: -7, right: -7,
+          width: 14, height: 14, borderRadius: "50%",
+          background: "#86a87d", border: "2px solid #4a7340",
+        }} />
+      )}
+      <Handle type="source" position={Position.Right}
+        style={{ background: borderColor, border: `2px solid ${borderColor}`, width: 10, height: 10, right: -6 }} />
+      <Handle type="source" position={Position.Bottom}
+        style={{ background: borderColor, border: `2px solid ${borderColor}`, width: 10, height: 10, bottom: -6 }} />
+    </div>
+  );
+};
+
+const roughGen = rough.generator();
+
+const strSeed = (id: string) => id.split("").reduce((s, c) => s + c.charCodeAt(0), 0);
+
+const opsToD = (ops: Array<{ op: string; data: number[] }>): string =>
+  ops.map(op => {
+    if (op.op === "move")     return `M ${op.data[0]} ${op.data[1]}`;
+    if (op.op === "lineTo")   return `L ${op.data[0]} ${op.data[1]}`;
+    if (op.op === "bcurveTo") return `C ${op.data[0]} ${op.data[1]} ${op.data[2]} ${op.data[3]} ${op.data[4]} ${op.data[5]}`;
+    return "";
+  }).filter(Boolean).join(" ");
+
+const SketchEdge = ({
+  id, sourceX, sourceY, targetX, targetY,
+  sourcePosition, targetPosition, selected, animated,
+}: EdgeProps) => {
+  const [edgePath] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
+  const stroke = selected ? "#6f97c7" : "#23221f";
+
+  const paths = useMemo(() => {
+    const drawable = roughGen.path(edgePath, {
+      roughness: 1.4,
+      strokeWidth: 1.8,
+      stroke,
+      fill: "none",
+      seed: strSeed(id),
+      disableMultiStroke: false,
+    });
+    return drawable.sets.map(set => opsToD(set.ops));
+  }, [edgePath, stroke, id]);
+
+  return (
+    <>
+      {paths.map((d, i) => (
+        <path key={i} d={d}
+          stroke={stroke}
+          strokeWidth={i === 0 ? 1.8 : 1.1}
+          fill="none"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeDasharray={animated ? "7 4" : undefined}
+        />
+      ))}
+      <circle cx={targetX} cy={targetY} r={3.5} fill={stroke} />
+    </>
+  );
+};
 
 const createDraftWorkflow = (projectId: string): Workflow => {
   const timestamp = new Date().toISOString();
@@ -176,6 +290,46 @@ const parseJsonValue = <T,>(value: string, field: string): T => {
 
 const formatJson = (value: unknown) => JSON.stringify(value, null, 2);
 
+const formatLogTime = (timestamp: string): string => {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return timestamp;
+  }
+
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+};
+
+const formatLogMetadata = (
+  metadata?: Record<string, unknown>,
+): string => {
+  if (!metadata) {
+    return "";
+  }
+
+  return Object.entries(metadata)
+    .filter(([, value]) =>
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean",
+    )
+    .filter(([, value]) => value !== "")
+    .slice(0, 4)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(" · ");
+};
+
+const logLevelClassName = (level: string): string =>
+  clsx(
+    level === "error" && "text-red-300",
+    level === "warn" && "text-amber-300",
+    level === "info" && "text-emerald-300",
+    level === "debug" && "text-sky-300",
+  );
+
 export function WorkflowEditor({
   project,
   selectedFeature,
@@ -185,6 +339,9 @@ export function WorkflowEditor({
   selectedFeature?: Feature;
   automationSettings?: AutomationSettings;
 }) {
+  const nodeTypes = useMemo(() => ({ sketch: SketchNode }), []);
+  const edgeTypes = useMemo(() => ({ default: SketchEdge }), []);
+
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
   const selectedWorkflowIdRef = useRef("");
@@ -206,6 +363,7 @@ export function WorkflowEditor({
   >([]);
   const [currentRun, setCurrentRun] = useState<WorkflowRun | null>(null);
   const [engineStatus, setEngineStatus] = useState<EngineStatusResponse | null>(null);
+  const [currentJobDetail, setCurrentJobDetail] = useState<EngineJobDetail | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isFileBusy, setIsFileBusy] = useState(false);
@@ -253,6 +411,13 @@ export function WorkflowEditor({
     () => (selectedNode ? readExecutorEditorState(selectedNode) : null),
     [selectedNode],
   );
+  const selectedNodeExecutorHint = useMemo(
+    () =>
+      selectedNode && selectedNodeExecutor
+        ? workflowNodeExecutorRuntimeHint(selectedNode, selectedNodeExecutor)
+        : undefined,
+    [selectedNode, selectedNodeExecutor],
+  );
   const currentWorkflowStep = useMemo(() => {
     if (!currentRun?.currentNodeId) {
       return undefined;
@@ -278,6 +443,26 @@ export function WorkflowEditor({
         job.workflowNodeId === currentRun.currentNodeId,
     );
   }, [currentRun, currentWorkflowStep, engineStatus]);
+  const visibleWorkflowLogs = useMemo(
+    () => currentWorkflowStep?.executionLogs.slice(-6) ?? [],
+    [currentWorkflowStep],
+  );
+  const visibleEngineLogs = useMemo(
+    () => currentJobDetail?.executionLogs.slice(-10) ?? [],
+    [currentJobDetail],
+  );
+  const currentEngineSchedulerWarning = useMemo(() => {
+    const lastError = engineStatus?.scheduler.lastError;
+    if (!currentEngineJob || !lastError) {
+      return undefined;
+    }
+
+    if (currentEngineJob.status === "queued" || currentEngineJob.status === "running") {
+      return lastError;
+    }
+
+    return undefined;
+  }, [currentEngineJob, engineStatus?.scheduler.lastError]);
   const showEngineRunNext = !automationSettings.globalAutoRunEnabled;
   const effectiveAutomationPolicy = useMemo(
     () =>
@@ -322,6 +507,78 @@ export function WorkflowEditor({
     currentRun?.currentNodeId,
     currentRun?.steps.length,
   ]);
+
+  useEffect(() => {
+    if (!project || !currentRun) {
+      return;
+    }
+
+    const shouldPoll =
+      currentRun.status === "running" ||
+      currentRun.status === "paused" ||
+      currentRun.steps.some((step) => step.status === "running");
+
+    if (!shouldPoll) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const refreshProgress = async () => {
+      try {
+        const [status, run] = await Promise.all([
+          fetchEngineStatus(project.id),
+          fetchWorkflowRun(currentRun.id),
+        ]);
+
+        if (cancelled) {
+          return;
+        }
+
+        setEngineStatus(status);
+        setCurrentRun(run);
+      } catch {
+        // Keep the last visible progress while the next poll retries.
+      }
+    };
+
+    const pollMs = currentRun.status === "running" ? 5_000 : 8_000;
+    const interval = window.setInterval(() => {
+      void refreshProgress();
+    }, pollMs);
+
+    void refreshProgress();
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [currentRun, project]);
+
+  useEffect(() => {
+    if (!currentEngineJob?.id) {
+      setCurrentJobDetail(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    void fetchEngineJobDetail(currentEngineJob.id)
+      .then((detail) => {
+        if (!cancelled) {
+          setCurrentJobDetail(detail);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCurrentJobDetail(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentEngineJob?.id, currentEngineJob?.logCount, currentEngineJob?.status]);
 
   const syncCanvas = useCallback((workflow: Workflow) => {
     setNodes(workflow.nodes.map((node) => nodeToCanvasNode(node)));
@@ -392,9 +649,7 @@ export function WorkflowEditor({
     setNodes((prevNodes) =>
       prevNodes.map((n) => ({
         ...n,
-        style: n.id === activeNodeId
-          ? { outline: "3px solid #10b981", outlineOffset: "2px" }
-          : undefined,
+        data: { ...n.data, active: n.id === activeNodeId },
       }))
     );
   }, [currentRun?.currentNodeId]);
@@ -843,6 +1098,34 @@ export function WorkflowEditor({
     setMessage("");
 
     try {
+      if (action === "run-next-engine") {
+        const run = await applyWorkflowRunAction({
+          runId: currentRun.id,
+          action: "run-next",
+        });
+        setCurrentRun(run);
+        await refreshEngineStatus();
+        setMessage("Workflow step enqueued. Engine tick is running in the background.");
+
+        void tickEngine({ mode: "manual" })
+          .then(async () => {
+            const [updatedRun] = await Promise.all([
+              fetchWorkflowRun(run.id),
+              refreshEngineStatus(),
+            ]);
+            setCurrentRun(updatedRun);
+          })
+          .catch((tickError) => {
+            setError(
+              tickError instanceof LoopBoardApiError
+                ? tickError.message
+                : "Loop Control Plane could not tick the engine.",
+            );
+          });
+
+        return;
+      }
+
       const run = await applyWorkflowRunAction({
         runId: currentRun.id,
         action,
@@ -1035,7 +1318,7 @@ export function WorkflowEditor({
       <div className="grid min-h-[42rem] lg:grid-cols-[minmax(0,1fr)_24rem]">
         <div className="min-w-0">
           <div
-            className="flex flex-wrap gap-2 border-b border-slate-200 bg-slate-50 p-3"
+            style={{ display: "flex", flexWrap: "wrap", gap: 6, borderBottom: "2px dashed #ddd9cd", background: "#f5f4f1", padding: "10px 12px" }}
             data-testid="workflow-node-catalog"
           >
             {workflowNodeCatalog.map((node) => (
@@ -1044,9 +1327,16 @@ export function WorkflowEditor({
                 type="button"
                 onClick={() => addCatalogNode(node.type)}
                 data-testid={`workflow-add-node-${node.type}`}
-                className="inline-flex min-h-8 items-center gap-1.5 border border-slate-300 bg-white px-2 text-[11px] font-semibold uppercase text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800"
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 5,
+                  border: "2px solid #23221f", borderRadius: 999,
+                  background: "#fcfbf8", color: "#23221f",
+                  padding: "4px 12px", fontSize: 12, fontWeight: 600,
+                  fontFamily: "var(--font-hand)", cursor: "pointer",
+                  textTransform: "uppercase", letterSpacing: "0.04em",
+                }}
               >
-                <Plus className="h-3.5 w-3.5" />
+                <Plus style={{ width: 12, height: 12 }} />
                 {node.name}
               </button>
             ))}
@@ -1059,18 +1349,22 @@ export function WorkflowEditor({
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
               onNodeClick={(_event, node) => setSelectedNodeId(node.id)}
+              nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
               fitView
             >
-              <Background />
-              <MiniMap pannable zoomable />
-              <Controls />
+              <Background color="#c8c4ba" gap={24} size={1.5} />
+              <MiniMap pannable zoomable
+                style={{ border: "2px solid #b0ac9f", borderRadius: "10px 8px 11px 9px", background: "#f0ede3" }}
+              />
+              <Controls style={{ border: "2px solid #b0ac9f", borderRadius: 8, overflow: "hidden", background: "#fcfbf8" }} />
             </ReactFlow>
           </div>
         </div>
 
-        <aside className="border-t border-slate-200 bg-slate-50 p-4 lg:border-l lg:border-t-0">
+        <aside style={{ borderLeft: "2px solid #ddd9cd", background: "#f5f4f1", padding: 16, overflowY: "auto" }}>
           <div className="grid gap-3">
-            <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+            <label style={{ display: "grid", gap: 4, fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "#6f6d67", fontFamily: "var(--font-hand)" }}>
               Workflow name
               <input
                 aria-label="Workflow name"
@@ -1253,7 +1547,7 @@ export function WorkflowEditor({
                   </div>
                   {currentEngineJob || currentWorkflowStep?.status === "running" ? (
                     <div
-                      className="border border-slate-200 bg-white p-2 text-xs leading-5 text-slate-600"
+                      className="grid gap-2 border border-slate-200 bg-white p-2 text-xs leading-5 text-slate-600"
                       data-testid="workflow-engine-job-status"
                     >
                       <p className="font-semibold uppercase text-slate-500">
@@ -1278,12 +1572,121 @@ export function WorkflowEditor({
                           {currentEngineJob.error ? (
                             <p className="mt-1 text-red-700">{currentEngineJob.error}</p>
                           ) : null}
+                          {currentEngineSchedulerWarning ? (
+                            <p className="mt-1 border border-amber-200 bg-amber-50 px-2 py-1 text-amber-900">
+                              Scheduler last error: {currentEngineSchedulerWarning}
+                            </p>
+                          ) : null}
                         </>
                       ) : (
                         <p className="mt-1 text-slate-500">
                           Step is running; waiting for engine job status.
                         </p>
                       )}
+                      {visibleWorkflowLogs.length > 0 || visibleEngineLogs.length > 0 ? (
+                        <div
+                          className="border border-slate-200 bg-slate-950 p-2 text-slate-100"
+                          data-testid="workflow-live-logs"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="font-semibold uppercase text-slate-300">
+                              Live Logs
+                            </p>
+                            {currentJobDetail ? (
+                              <span className="text-[10px] uppercase text-slate-400">
+                                {currentJobDetail.executionLogs.length} engine entries
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="mt-2 max-h-48 overflow-y-auto font-mono text-[11px] leading-5">
+                            {visibleWorkflowLogs.length > 0 ? (
+                              <div className="mb-2 border-b border-slate-700 pb-2">
+                                <p className="mb-1 font-sans text-[10px] font-semibold uppercase text-slate-400">
+                                  Workflow Step
+                                </p>
+                                {visibleWorkflowLogs.map((entry) => {
+                                  const metadata = formatLogMetadata(entry.metadata);
+
+                                  return (
+                                    <div key={`${entry.timestamp}-${entry.message}`} className="py-0.5">
+                                      <span className="text-slate-500">
+                                        {formatLogTime(entry.timestamp)}
+                                      </span>{" "}
+                                      <span className={logLevelClassName(entry.level)}>
+                                        {entry.level}
+                                      </span>{" "}
+                                      <span>{entry.message}</span>
+                                      {metadata ? (
+                                        <span className="text-slate-500"> · {metadata}</span>
+                                      ) : null}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ) : null}
+                            {visibleEngineLogs.length > 0 ? (
+                              <div>
+                                <p className="mb-1 font-sans text-[10px] font-semibold uppercase text-slate-400">
+                                  Engine
+                                </p>
+                                {visibleEngineLogs.map((entry) => {
+                                  const metadata = formatLogMetadata(entry.metadata);
+
+                                  return (
+                                    <div key={`${entry.timestamp}-${entry.message}`} className="py-0.5">
+                                      <span className="text-slate-500">
+                                        {formatLogTime(entry.timestamp)}
+                                      </span>{" "}
+                                      <span className={logLevelClassName(entry.level)}>
+                                        {entry.level}
+                                      </span>{" "}
+                                      <span>{entry.message}</span>
+                                      {metadata ? (
+                                        <span className="text-slate-500"> · {metadata}</span>
+                                      ) : null}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <p className="text-slate-400">
+                                Waiting for engine log detail.
+                              </p>
+                            )}
+                            {currentEngineSchedulerWarning ? (
+                              <div className="mt-2 border-t border-slate-700 pt-2">
+                                <p className="mb-1 font-sans text-[10px] font-semibold uppercase text-slate-400">
+                                  Scheduler
+                                </p>
+                                <div className="py-0.5">
+                                  <span className="text-amber-300">warn</span>{" "}
+                                  <span>{currentEngineSchedulerWarning}</span>
+                                </div>
+                              </div>
+                            ) : null}
+                            {currentJobDetail?.stdoutExcerpt ? (
+                              <div className="mt-2 border-t border-slate-700 pt-2 text-slate-300">
+                                <p className="font-sans text-[10px] font-semibold uppercase text-slate-400">
+                                  Stdout
+                                </p>
+                                <p className="whitespace-pre-wrap break-words">
+                                  {currentJobDetail.stdoutExcerpt}
+                                </p>
+                              </div>
+                            ) : null}
+                            {currentJobDetail?.stderrExcerpt ? (
+                              <div className="mt-2 border-t border-slate-700 pt-2 text-red-200">
+                                <p className="font-sans text-[10px] font-semibold uppercase text-slate-400">
+                                  Stderr
+                                </p>
+                                <p className="whitespace-pre-wrap break-words">
+                                  {currentJobDetail.stderrExcerpt}
+                                </p>
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
                   {currentRun.steps.at(-1) ? (
@@ -1468,11 +1871,18 @@ export function WorkflowEditor({
                       >
                         {workflowExecutorBackendOptions().map((backend) => (
                           <option key={backend} value={backend}>
-                            {compactText(backend)}
+                            {compactText(
+                              workflowExecutorBackendLabel(backend, selectedNode.type),
+                            )}
                           </option>
                         ))}
                       </select>
                     </label>
+                    {selectedNodeExecutorHint ? (
+                      <p className="border border-sky-100 bg-sky-50 px-2 py-1.5 text-xs font-medium normal-case text-sky-900">
+                        {selectedNodeExecutorHint}
+                      </p>
+                    ) : null}
                     <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
                       Args
                       <input

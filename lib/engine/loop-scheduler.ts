@@ -285,7 +285,11 @@ export const processEngineJob = (input: {
     return {
       status: "completed",
       attempt: job.attempt,
-      result: executorResult.result,
+      result: {
+        ...(executorResult.result ?? {}),
+        ...(executorResult.stdoutSummary ? { stdoutSummary: executorResult.stdoutSummary } : {}),
+        ...(executorResult.stderrSummary ? { stderrSummary: executorResult.stderrSummary } : {}),
+      },
       executionLogs,
       startedAt,
       completedAt: now,

@@ -172,7 +172,6 @@ export const createCursorBackendAdapter = (
       backend: "cursor",
       profile: "cursor",
       buildArgs: ({ prompt, model }) => [
-        "agent",
         "--print",
         "--force",
         ...(model ? ["--model", model] : []),

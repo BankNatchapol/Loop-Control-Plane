@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { homedir } from "node:os";
 
 import {
   evaluateWorkflowNodePolicy,
@@ -106,6 +107,10 @@ const DEFAULT_OUTPUT_BYTE_LIMIT = 256 * 1024;
 const SUMMARY_CHAR_LIMIT = 240;
 
 const SPEC_KIT_CANDIDATES = ["spec-kit", "speckit", "specify"] as const;
+const CURSOR_AGENT_CANDIDATES = [
+  { command: "cursor-agent", defaultArgs: [] },
+  { command: "cursor", defaultArgs: ["agent"] },
+] as const;
 
 const PROFILE_COMMANDS: Record<
   Exclude<ProcessCommandProfile, "spec-kit">,
@@ -114,7 +119,7 @@ const PROFILE_COMMANDS: Record<
   "npm-test": { command: "npm", defaultArgs: ["test"], placeholder: false },
   git: { command: "git", defaultArgs: [], placeholder: false },
   gh: { command: "gh", defaultArgs: [], placeholder: false },
-  cursor: { command: "cursor", defaultArgs: [], placeholder: false },
+  cursor: { command: "cursor-agent", defaultArgs: [], placeholder: false },
   claude: { command: "claude", defaultArgs: [], placeholder: false },
   codex: { command: "codex", defaultArgs: [], placeholder: false },
   ao: { command: "ao", defaultArgs: [], placeholder: false },
@@ -122,7 +127,11 @@ const PROFILE_COMMANDS: Record<
 
 const ALLOWED_COMMANDS = new Set<string>([
   ...Object.values(PROFILE_COMMANDS).map((entry) => entry.command),
+  ...CURSOR_AGENT_CANDIDATES.map((entry) => entry.command),
   ...SPEC_KIT_CANDIDATES,
+  // Absolute-path fallbacks for when PATH is stripped in IDE-launched servers
+  "/opt/homebrew/bin/claude",
+  "/usr/local/bin/claude",
 ]);
 
 const BASE_PROCESS_ENV_KEYS = [
@@ -131,12 +140,20 @@ const BASE_PROCESS_ENV_KEYS = [
   "SystemRoot",
   "windir",
   "HOME",
+  "USER",        // required by Claude Code to locate its auth session
+  "LOGNAME",
   "USERPROFILE",
   "TMPDIR",
   "TEMP",
   "TMP",
   "LANG",
   "LC_ALL",
+  // Auth keys for AI CLI backends (API key fallback when interactive login is used)
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_BASE_URL",
+  "OPENAI_API_KEY",
+  "CODEX_API_KEY",
+  "CLAUDE_CODE_API_KEY",
 ] as const;
 
 const DEFAULT_PROCESS_ENV_ALLOWLIST = [...BASE_PROCESS_ENV_KEYS];
@@ -165,6 +182,20 @@ const summarizeOutput = (value: string): string => {
     : redacted;
 };
 
+const augmentPath = (existingPath: string | undefined): string => {
+  const home = homedir();
+  const extras = [
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    `${home}/.npm-global/bin`,
+    `${home}/.local/bin`,
+    `${home}/.nix-profile/bin`,
+    "/nix/var/nix/profiles/default/bin",
+  ];
+  const parts = existingPath ? existingPath.split(":") : [];
+  return [...new Set([...extras, ...parts])].join(":");
+};
+
 const buildSafeProcessEnv = (envAllowlist: readonly string[]): NodeJS.ProcessEnv => {
   const env: Record<string, string> = {};
 
@@ -179,9 +210,7 @@ const buildSafeProcessEnv = (envAllowlist: readonly string[]): NodeJS.ProcessEnv
     env.NODE_ENV = process.env.NODE_ENV ?? "production";
   }
 
-  if (!env.PATH && typeof process.env.PATH === "string") {
-    env.PATH = process.env.PATH;
-  }
+  env.PATH = augmentPath(env.PATH ?? process.env.PATH);
 
   return env as NodeJS.ProcessEnv;
 };
@@ -253,6 +282,32 @@ export const discoverSpecKitBinary = (
   return undefined;
 };
 
+export const discoverCursorAgentProfile = (
+  env: NodeJS.ProcessEnv = buildSafeProcessEnv(DEFAULT_PROCESS_ENV_ALLOWLIST),
+): Pick<ProcessProfileDefinition, "command" | "defaultArgs" | "discovered"> => {
+  for (const candidate of CURSOR_AGENT_CANDIDATES) {
+    const result = spawnSync(candidate.command, [...candidate.defaultArgs, "--version"], {
+      encoding: "utf8",
+      env,
+      timeout: 2_000,
+    });
+
+    if (!result.error && result.status === 0) {
+      return {
+        command: candidate.command,
+        defaultArgs: [...candidate.defaultArgs],
+        discovered: true,
+      };
+    }
+  }
+
+  return {
+    command: "cursor-agent",
+    defaultArgs: [],
+    discovered: false,
+  };
+};
+
 export const resolveProcessProfile = (
   profile: ProcessCommandProfile,
   env: NodeJS.ProcessEnv = buildSafeProcessEnv(DEFAULT_PROCESS_ENV_ALLOWLIST),
@@ -265,6 +320,31 @@ export const resolveProcessProfile = (
       defaultArgs: [],
       placeholder: false,
       discovered: Boolean(discovered),
+    };
+  }
+
+  if (profile === "cursor") {
+    const discovered = discoverCursorAgentProfile(env);
+    return {
+      profile,
+      command: discovered.command,
+      defaultArgs: discovered.defaultArgs,
+      placeholder: false,
+      discovered: discovered.discovered,
+    };
+  }
+
+  if (profile === "claude") {
+    const claudeAbsolutePaths = ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"];
+    const absoluteFallback = claudeAbsolutePaths.find((p) => {
+      const r = spawnSync(p, ["--version"], { encoding: "utf8", timeout: 2000, env });
+      return r.status === 0;
+    });
+    return {
+      profile,
+      command: absoluteFallback ?? "claude",
+      defaultArgs: [],
+      placeholder: false,
     };
   }
 
@@ -404,7 +484,7 @@ export class ProcessRunner {
     const env = buildSafeProcessEnv(envAllowlist);
     const profileDefinition = resolveProcessProfile(request.profile, env);
     const command = profileDefinition.command;
-    const args = request.args ?? [...profileDefinition.defaultArgs];
+    const args = [...profileDefinition.defaultArgs, ...(request.args ?? [])];
 
     assertAllowedCommand(command);
     validateArgs(args);
@@ -414,6 +494,14 @@ export class ProcessRunner {
         "Spec Kit CLI was not found on PATH. Tried: spec-kit, speckit, specify.",
         404,
         "spec_kit_unavailable",
+      );
+    }
+
+    if (request.profile === "cursor" && !profileDefinition.discovered) {
+      throw new ProcessRunnerError(
+        "Cursor Agent CLI was not found on PATH. Tried: cursor-agent, cursor agent.",
+        404,
+        "cursor_unavailable",
       );
     }
 

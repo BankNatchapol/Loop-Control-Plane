@@ -40,6 +40,12 @@ const ACTION_OUTPUT_NAMES: Record<string, string[]> = {
   tasks: ["tasks"],
 };
 
+const SPEC_KIT_AGENT_COMMANDS: Record<string, string> = {
+  spec: "/speckit.specify",
+  plan: "/speckit.plan",
+  tasks: "/speckit.tasks",
+};
+
 const nowIso = (): string => new Date().toISOString();
 
 const logEntry = (
@@ -82,6 +88,87 @@ const resolveInputPathForAction = (
 
   const priorArtifact = resolveOutputArtifact(action, outputArtifacts);
   return priorArtifact?.path ?? briefPath;
+};
+
+export const buildSpecKitAgentPrompt = (input: {
+  backend: string;
+  actions: string[];
+  briefPath: string;
+  briefContent: string;
+  outputArtifacts: WorkflowArtifact[];
+}): string => {
+  const integration =
+    input.backend === "claude-code"
+      ? "claude"
+      : input.backend === "cursor"
+        ? "cursor"
+        : input.backend === "codex"
+          ? "codex"
+          : input.backend;
+  const actionLines = input.actions
+    .map((action) => {
+      const command = SPEC_KIT_AGENT_COMMANDS[action] ?? `/speckit.${action}`;
+      const skill = `speckit-${action === "spec" ? "specify" : action}`;
+      const outputArtifact = resolveOutputArtifact(action, input.outputArtifacts);
+      const outputPath = outputArtifact?.path ?? `(no output path configured for ${action})`;
+
+      return `- ${command} or ${skill}: produce/update ${outputPath}`;
+    })
+    .join("\n");
+  const outputLines = input.outputArtifacts
+    .map(
+      (artifact) =>
+        `- ${artifact.name}: ${artifact.path}${artifact.required ? " (required)" : ""}`,
+    )
+    .join("\n");
+
+  return [
+    "You are running the Spec Kit Actions workflow step for Loop Control Plane.",
+    "",
+    "Use GitHub Spec Kit the normal way: through the installed agent commands or skills, not direct specify spec, specify plan, or specify tasks CLI subcommands.",
+    `Target integration/backend: ${integration}.`,
+    "",
+    "If this repository is not initialized as a Spec Kit project, initialize it first with:",
+    `specify init --here --integration ${integration} --force`,
+    "",
+    "Run or faithfully apply these Spec Kit phases in order:",
+    actionLines,
+    "",
+    "If slash commands are not directly executable in this CLI session, read the installed Spec Kit command or skill templates from the .specify directory and the agent integration folder, then perform the same work manually.",
+    "",
+    "Required output artifacts:",
+    outputLines,
+    "",
+    `Feature brief path: ${input.briefPath}`,
+    "",
+    "Feature brief:",
+    input.briefContent.trim(),
+    "",
+    "Finish only after the required artifact files exist at the paths above. Keep content concrete and implementation-ready, but do not implement application code during this step.",
+  ].join("\n");
+};
+
+export const verifySpecKitOutputArtifacts = (input: {
+  projectRepoPath: string;
+  outputArtifacts: WorkflowArtifact[];
+}): { ok: true; outputArtifacts: WorkflowArtifact[] } | { ok: false; missing: WorkflowArtifact[] } => {
+  const missing = input.outputArtifacts.filter(
+    (artifact) =>
+      artifact.required && !artifactExistsOnDisk(input.projectRepoPath, artifact.path),
+  );
+
+  if (missing.length > 0) {
+    return { ok: false, missing };
+  }
+
+  return {
+    ok: true,
+    outputArtifacts: input.outputArtifacts.filter((artifact) =>
+      artifact.required
+        ? artifactExistsOnDisk(input.projectRepoPath, artifact.path)
+        : true,
+    ),
+  };
 };
 
 const missingOutputError = (
@@ -130,6 +217,21 @@ export const executeSpecKitActions = async (
     };
   }
 
+  // Fail fast if the brief file doesn't exist on disk — avoids burning retries on a bad path.
+  if (!artifactExistsOnDisk(input.projectRepoPath, briefArtifact.path)) {
+    return {
+      success: false,
+      errorCode: "spec_kit_brief_not_found",
+      error: `Feature brief not found on disk at "${briefArtifact.path}" (under ${input.projectRepoPath}). Create or upload the brief in the Features tab first.`,
+      logs: [
+        logEntry("error", "Feature brief file does not exist on disk.", {
+          briefPath: briefArtifact.path,
+          projectRepoPath: input.projectRepoPath,
+        }),
+      ],
+    };
+  }
+
   const actions =
     input.actions && input.actions.length > 0
       ? input.actions
@@ -143,6 +245,22 @@ export const executeSpecKitActions = async (
       briefPath,
     }),
   ];
+
+  if (!input.processRunner) {
+    return {
+      success: false,
+      errorCode: "spec_kit_requires_agent_backend",
+      error:
+        "Spec Kit Actions must use an agent backend such as cursor, codex, or claude-code. The modern specify CLI does not provide direct spec/plan/tasks subcommands.",
+      logs: [
+        ...logs,
+        logEntry("error", "Spec Kit Actions requires an agent backend.", {
+          actions,
+          supportedBackends: ["cursor", "codex", "claude-code"],
+        }),
+      ],
+    };
+  }
 
   for (const action of actions) {
     const outputArtifact = resolveOutputArtifact(action, input.outputArtifacts);

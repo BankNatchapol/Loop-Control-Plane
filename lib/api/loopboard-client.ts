@@ -387,6 +387,14 @@ export const fetchEngineStatus = async (
   return readApiResponse<EngineStatusResponse>(response);
 };
 
+export const fetchWorkflowRun = async (runId: string): Promise<WorkflowRun> => {
+  const response = await fetch(`/api/workflow-runs/${encodeURIComponent(runId)}`, {
+    cache: "no-store",
+  });
+
+  return readApiResponse<WorkflowRun>(response);
+};
+
 export const fetchEngineJobs = async (input: {
   projectId?: string;
   taskId?: string;
@@ -432,6 +440,21 @@ export const fetchEngineJobs = async (input: {
   });
 
   return readApiResponse<EngineJobListResponse>(response);
+};
+
+export type ProjectFileResult =
+  | { exists: false; path: string }
+  | { exists: true; path: string; content: string; truncated: boolean; sizeBytes: number };
+
+export const fetchProjectFile = async (
+  projectId: string,
+  path: string,
+): Promise<ProjectFileResult> => {
+  const response = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/file?path=${encodeURIComponent(path)}`,
+    { cache: "no-store" },
+  );
+  return readApiResponse<ProjectFileResult>(response);
 };
 
 export const fetchEngineJobDetail = async (jobId: string): Promise<EngineJobDetail> => {

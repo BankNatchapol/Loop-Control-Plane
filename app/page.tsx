@@ -76,6 +76,8 @@ import {
   cancelEngineJob,
   fetchEngineJobDetail,
   fetchEngineStatus,
+  fetchProjectFile,
+  type ProjectFileResult,
   retryEngineJob,
   resumeWorkflowRunFromEngine,
   generatePersistedTaskClaudeCodePrompt,
@@ -1338,6 +1340,9 @@ function LoopEnginePanel({
   const [jobRecoveryError, setJobRecoveryError] = useState("");
   const [workflowResumeAction, setWorkflowResumeAction] = useState("");
   const [workflowResumeError, setWorkflowResumeError] = useState("");
+  const [viewingArtifactPath, setViewingArtifactPath] = useState<string | null>(null);
+  const [artifactFile, setArtifactFile] = useState<ProjectFileResult | null>(null);
+  const [artifactFileLoading, setArtifactFileLoading] = useState(false);
 
   useEffect(() => {
     if (!selectedJobId) {
@@ -1461,6 +1466,19 @@ function LoopEnginePanel({
       );
     } finally {
       setJobRecoveryAction("");
+    }
+  }
+
+  async function viewArtifact(path: string) {
+    if (!project?.id) return;
+    setViewingArtifactPath(path);
+    setArtifactFile(null);
+    setArtifactFileLoading(true);
+    try {
+      const result = await fetchProjectFile(project.id, path);
+      setArtifactFile(result);
+    } finally {
+      setArtifactFileLoading(false);
     }
   }
 
@@ -1918,6 +1936,85 @@ function LoopEnginePanel({
           ) : null}
           {jobDetail ? (
             <div className="mt-3 grid gap-3 lg:grid-cols-2">
+              {/* Output artifacts from payload */}
+              {Array.isArray((jobDetail.payloadSummary as Record<string, unknown>).outputArtifacts) ? (() => {
+                const artifacts = (jobDetail.payloadSummary as Record<string, unknown>).outputArtifacts as Array<{ name?: string; path?: string }>;
+                return (
+                  <div className="min-w-0 border-2 border-blue-600 bg-blue-50 p-2 lg:col-span-2">
+                    <p className="text-[10px] font-semibold uppercase text-blue-800">
+                      Output Artifacts
+                    </p>
+                    <ul className="mt-2 space-y-1">
+                      {artifacts.map((a) => a.path ? (
+                        <li key={a.path} className="flex items-center gap-2">
+                          <span className="text-xs font-mono text-blue-900 flex-1 break-all">{a.path}</span>
+                          <button
+                            type="button"
+                            onClick={() => void viewArtifact(a.path!)}
+                            className="shrink-0 rounded border border-blue-400 bg-white px-2 py-0.5 text-[10px] font-semibold text-blue-700 hover:bg-blue-100"
+                          >
+                            View
+                          </button>
+                        </li>
+                      ) : null)}
+                    </ul>
+                    {/* Inline file viewer */}
+                    {viewingArtifactPath ? (
+                      <div className="mt-3 border-t border-blue-200 pt-2">
+                        <div className="flex items-center justify-between">
+                          <p className="font-mono text-[10px] text-blue-700">{viewingArtifactPath}</p>
+                          <button
+                            type="button"
+                            onClick={() => { setViewingArtifactPath(null); setArtifactFile(null); }}
+                            className="text-[10px] text-blue-500 hover:text-blue-800"
+                          >
+                            ✕ close
+                          </button>
+                        </div>
+                        {artifactFileLoading ? (
+                          <p className="mt-2 text-[10px] text-blue-600">Loading…</p>
+                        ) : artifactFile ? (
+                          artifactFile.exists ? (
+                            <>
+                              {artifactFile.truncated ? (
+                                <p className="mt-1 text-[10px] text-amber-700">
+                                  File truncated ({Math.round(artifactFile.sizeBytes / 1024)} KB). Showing first 200 KB.
+                                </p>
+                              ) : null}
+                              <pre className="mt-1 max-h-96 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px] leading-5 text-slate-800 bg-white border border-blue-200 p-2">
+                                {artifactFile.content}
+                              </pre>
+                            </>
+                          ) : (
+                            <p className="mt-2 text-[10px] text-red-600">File not found on disk.</p>
+                          )
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })() : null}
+              {/* Agent stdout */}
+              {jobDetail.stdoutExcerpt ? (
+                <div className="min-w-0 border-2 border-green-700 bg-green-50 p-2 lg:col-span-2">
+                  <p className="text-[10px] font-semibold uppercase text-green-800">
+                    Agent Output
+                  </p>
+                  <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px] leading-5 text-green-900">
+                    {jobDetail.stdoutExcerpt}
+                  </pre>
+                </div>
+              ) : null}
+              {jobDetail.resultSummary && !jobDetail.stdoutExcerpt ? (
+                <div className="min-w-0 border-2 border-green-700 bg-green-50 p-2 lg:col-span-2">
+                  <p className="text-[10px] font-semibold uppercase text-green-800">
+                    Result
+                  </p>
+                  <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px] leading-5 text-green-900">
+                    {JSON.stringify(jobDetail.resultSummary, null, 2)}
+                  </pre>
+                </div>
+              ) : null}
               <div className="min-w-0 border border-slate-200 bg-slate-50 p-2">
                 <p className="text-[10px] font-semibold uppercase text-slate-500">
                   Payload Summary
@@ -1967,16 +2064,6 @@ function LoopEnginePanel({
                   </>
                 ) : null}
               </div>
-              {jobDetail.stdoutExcerpt ? (
-                <div className="min-w-0 border border-slate-200 bg-slate-50 p-2 lg:col-span-2">
-                  <p className="text-[10px] font-semibold uppercase text-slate-500">
-                    Stdout Excerpt
-                  </p>
-                  <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px] leading-5 text-slate-700">
-                    {jobDetail.stdoutExcerpt}
-                  </pre>
-                </div>
-              ) : null}
               {jobDetail.stderrExcerpt ? (
                 <div className="min-w-0 border border-slate-200 bg-slate-50 p-2 lg:col-span-2">
                   <p className="text-[10px] font-semibold uppercase text-slate-500">
@@ -3493,6 +3580,26 @@ export default function Home() {
   const { projects, features, tasks, latestWorkflowRuns } = boardData;
   const sensors = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor));
 
+  // Tab navigation state
+  type ActiveTab = "overview" | "board" | "features" | "workflows" | "settings";
+  const [activeTab, setActiveTab] = useState<ActiveTab>("overview");
+
+  // URL sync: read ?tab= on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get("tab") as ActiveTab | null;
+    if (tab && ["overview", "board", "features", "workflows", "settings"].includes(tab)) {
+      setActiveTab(tab);
+    }
+  }, []);
+
+  // URL sync: write on tab change
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", activeTab);
+    window.history.replaceState({}, "", url.toString());
+  }, [activeTab]);
+
   const featuresById = useMemo(
     () => new Map(features.map((feature) => [feature.id, feature])),
     [features],
@@ -3946,7 +4053,7 @@ export default function Home() {
 
     const interval = window.setInterval(() => {
       void loadEngineStatus(selectedProject.id, { silent: true });
-    }, 3_000);
+    }, 10_000);
 
     return () => window.clearInterval(interval);
   }, [loadBackendAvailability, loadEngineStatus, selectedProject?.id]);
@@ -5037,270 +5144,1210 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-100 text-slate-950">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-[112rem] flex-col gap-4 px-4 py-4 lg:px-6">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-semibold uppercase text-slate-600">
-                  {selectedProject?.repository ?? "loading repository"}
-                </span>
-                <span className="border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-semibold uppercase text-slate-600">
-                  {selectedProject?.defaultBranch ?? "loading branch"}
-                </span>
-                <span
-                  className={clsx(
-                    "border px-2 py-1 text-xs font-semibold uppercase",
-                    boardData.automationSettings.globalAutoRunEnabled
-                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                      : "border-rose-200 bg-rose-50 text-rose-700",
-                  )}
-                >
-                  <ShieldAlert className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />
-                  {boardData.automationSettings.globalAutoRunEnabled
-                    ? "global auto-run enabled"
-                    : "global auto-run disabled"}
-                </span>
-                <span
-                  className="border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs font-semibold uppercase text-indigo-800"
-                  data-testid="engine-active-jobs-header"
-                >
-                  <Bot className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />
-                  {engineStatus?.activeJobCount ?? 0} engine jobs active
-                </span>
-              </div>
-              <h1 className="mt-2 text-xl font-semibold tracking-normal text-slate-950 sm:text-2xl">
-                {selectedProject?.name ?? "Loop Control Plane"}
-              </h1>
-              <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
-                {selectedProject?.description ?? "Loading persisted board data..."}
-              </p>
+    <div style={{ minHeight: "100vh", background: "#f0ede3" }}>
+      {/* ===== APP BAR ===== */}
+      <header style={{ borderBottom: "2px solid #23221f", background: "#fcfbf8" }}>
+        <div style={{ maxWidth: 1400, margin: "0 auto", padding: "12px 24px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          {/* Logo */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            <div style={{ width: 32, height: 32, background: "#23221f", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <RefreshCw style={{ color: "#f6f3ec", width: 18, height: 18 }} />
             </div>
-
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:shrink-0">
-              {counters.map((counter) => (
-                <button
-                  key={counter.label}
-                  type="button"
-                  onClick={() =>
-                    counter.id
-                      ? changeBoardQuickFilter(
-                          boardQuickFilter === counter.id ? "all" : counter.id,
-                        )
-                      : undefined
-                  }
-                  data-testid={`dashboard-filter-${counter.id}`}
-                  className={clsx(
-                    "min-w-0 border px-3 py-2 text-left hover:border-sky-300 hover:bg-sky-50",
-                    boardQuickFilter === counter.id
-                      ? "border-sky-300 bg-sky-50 ring-2 ring-sky-100"
-                      : "border-slate-200 bg-slate-50",
-                  )}
-                >
-                  <p className="truncate text-xs font-medium text-slate-500">
-                    {counter.label}
-                  </p>
-                  <p className="mt-1 text-xl font-semibold text-slate-950">
-                    {counter.value}
-                  </p>
-                </button>
-              ))}
-              <div className="col-span-2 min-w-0 border border-slate-200 bg-slate-50 px-3 py-2 text-left sm:col-span-4">
-                <p className="truncate text-xs font-medium text-slate-500">
-                  Latest Workflow Run
-                </p>
-                <p className="mt-1 truncate text-sm font-semibold uppercase text-slate-950">
-                  {latestProjectWorkflowRun?.status ?? "no runs"}
-                </p>
-                {latestProjectWorkflowRun ? (
-                  <p className="mt-1 truncate text-xs text-slate-500">
-                    {latestProjectWorkflowRun.currentNodeId ?? "complete"} ·{" "}
-                    {formatTimestamp(latestProjectWorkflowRun.updatedAt)}
-                  </p>
-                ) : null}
-              </div>
-            </div>
+            <span style={{ fontFamily: "var(--font-caveat)", fontSize: 20, fontWeight: 700, color: "#23221f", letterSpacing: 0 }}>
+              Loop
+            </span>
           </div>
 
-          <section
-            className="grid gap-3 border border-slate-200 bg-slate-50 p-3 lg:grid-cols-2 xl:grid-cols-4"
-            data-testid="project-metrics"
-          >
-            <MetricGroup title="Tasks By Status" metrics={projectStatusMetrics} />
-            <MetricGroup title="Tasks By Owner" metrics={projectOwnerMetrics} />
-            <MetricGroup title="Tasks By Risk" metrics={projectRiskMetrics} />
-            <MetricGroup
-              title="Engine (24h)"
-              metrics={projectEngineMetrics}
-              emptyHint={projectEngineMetricsEmptyHint}
-            />
-          </section>
+          {/* Divider */}
+          <div style={{ width: 1, height: 22, background: "#ddd9cd", flexShrink: 0 }} />
 
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="inline-flex min-w-0 items-center gap-2 border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
-              <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+          {/* Project selector + new button */}
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <label className="sketch-pill" style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 14px", cursor: "pointer", borderColor: "#23221f", color: "#23221f", background: "#fcfbf8", fontSize: 15 }}>
+              <FolderGit2 style={{ width: 15, height: 15, flexShrink: 0, color: "#6f6d67" }} />
               <select
                 value={selectedProject?.id ?? ""}
                 onChange={(event) => selectProject(event.target.value)}
-                className="max-w-60 bg-transparent text-xs font-semibold text-slate-700 outline-none"
+                style={{ background: "transparent", border: "none", outline: "none", fontSize: 15, fontFamily: "var(--font-hand)", color: "#23221f", cursor: "pointer", maxWidth: 200 }}
                 disabled={projects.length === 0}
               >
-                {projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.name}
-                  </option>
-                ))}
+                {projects.length === 0 ? (
+                  <option value="">No projects</option>
+                ) : (
+                  projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))
+                )}
               </select>
             </label>
             <button
               type="button"
               onClick={startCreateProject}
-              className="inline-flex max-w-full items-center gap-1.5 border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800"
+              title="New project"
+              style={{
+                width: 30, height: 30, borderRadius: 999, border: "2px solid #23221f",
+                background: "transparent", color: "#23221f", cursor: "pointer",
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                fontSize: 18, fontWeight: 700, lineHeight: 1, flexShrink: 0,
+              }}
             >
-              <Plus className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">Add project</span>
-            </button>
-            {selectedProject ? (
-              <>
-                <button
-                  type="button"
-                  onClick={startEditProject}
-                  className="inline-flex max-w-full items-center gap-1.5 border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800"
-                >
-                  <Pencil className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate">Edit project</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void openSelectedProject("open-folder")}
-                  disabled={projectOpenAction.length > 0}
-                  className="inline-flex max-w-full items-center gap-1.5 border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <FolderOpen className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate">Open Folder</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void openSelectedProject("open-vscode")}
-                  disabled={projectOpenAction.length > 0}
-                  className="inline-flex max-w-full items-center gap-1.5 border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Code2 className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate">Open VS Code</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={removeSelectedProject}
-                  disabled={isSavingProject}
-                  className="inline-flex max-w-full items-center gap-1.5 border border-red-200 bg-white px-2.5 py-1 text-xs font-semibold text-red-700 hover:border-red-300 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Trash2 className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate">Delete project</span>
-                </button>
-              </>
-            ) : null}
-            <label className="inline-flex max-w-full items-center gap-2 border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800">
-              <input
-                type="checkbox"
-                checked={boardData.automationSettings.globalAutoRunEnabled}
-                onChange={(event) => void toggleGlobalAutoRun(event.target.checked)}
-                className="h-3.5 w-3.5 accent-slate-900"
-              />
-              <span className="truncate">Global auto-run</span>
-            </label>
-            {visibleFeatures.map((feature) => (
-              <button
-                key={feature.id}
-                type="button"
-                onClick={() => selectFeature(feature.id)}
-                className={clsx(
-                  "inline-flex max-w-full items-center gap-1.5 border px-2.5 py-1 text-xs font-medium",
-                  selectedFeature?.id === feature.id
-                    ? "border-sky-300 bg-sky-50 text-sky-800"
-                    : "border-slate-200 bg-slate-50 text-slate-700",
-                )}
-              >
-                <Columns3 className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-                <span className="min-w-0 truncate">
-                  {feature.name}: {featureStatusLabel(feature.status)}
-                </span>
-              </button>
-            ))}
-            <button
-              type="button"
-              onClick={reloadBoard}
-              className="inline-flex max-w-full items-center gap-1.5 border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800"
-            >
-              <ListRestart className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">Reload persisted data</span>
+              +
             </button>
           </div>
 
-          {projectMutationError ? (
-            <div className="border border-red-200 bg-red-50 p-3 text-sm leading-6 text-red-800">
-              {projectMutationError}
-            </div>
-          ) : null}
-          {projectMutationMessage ? (
-            <div className="border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-emerald-800">
-              {projectMutationMessage}
-            </div>
-          ) : null}
-          <div className="grid gap-2 border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700 md:grid-cols-[minmax(0,16rem)_minmax(0,1fr)]">
-            <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase text-slate-500">
-                Effective Automation Policy
-              </p>
-              <p className="mt-1 font-semibold text-slate-950">
-                {effectiveAutomationPolicy.message}
-              </p>
-            </div>
-            <div className="grid gap-1 sm:grid-cols-2">
-              {effectiveAutomationPolicy.reasons.map((reason) => (
-                <span
-                  key={reason}
-                  className="min-w-0 border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600"
+          {/* Feature selector */}
+          <label className="sketch-pill" style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 14px", cursor: "pointer", borderColor: "#9a978f", color: "#6f6d67", background: "#fcfbf8", fontSize: 15 }}>
+            <Columns3 style={{ width: 15, height: 15, flexShrink: 0 }} />
+            <select
+              value={selectedFeature?.id ?? ""}
+              onChange={(event) => selectFeature(event.target.value)}
+              style={{ background: "transparent", border: "none", outline: "none", fontSize: 15, fontFamily: "var(--font-hand)", color: "#23221f", cursor: "pointer", maxWidth: 200 }}
+              disabled={visibleFeatures.length === 0}
+            >
+              {visibleFeatures.length === 0 ? (
+                <option value="">No features</option>
+              ) : (
+                visibleFeatures.map((feature) => (
+                  <option key={feature.id} value={feature.id}>
+                    {feature.name}: {featureStatusLabel(feature.status)}
+                  </option>
+                ))
+              )}
+            </select>
+          </label>
+
+          {/* Spacer */}
+          <div style={{ flex: 1 }} />
+
+          {/* Auto-run badge */}
+          <span
+            className="sketch-pill"
+            style={{
+              padding: "5px 14px",
+              fontSize: 13,
+              fontWeight: 700,
+              borderColor: boardData.automationSettings.globalAutoRunEnabled ? "#86a87d" : "#d08a7f",
+              background: boardData.automationSettings.globalAutoRunEnabled ? "#eef5ea" : "#fbeae6",
+              color: boardData.automationSettings.globalAutoRunEnabled ? "#4a7340" : "#b14b3c",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              textTransform: "uppercase",
+              letterSpacing: "0.03em",
+            }}
+          >
+            <ShieldAlert style={{ width: 14, height: 14 }} />
+            {boardData.automationSettings.globalAutoRunEnabled ? "auto-run on" : "auto-run off"}
+          </span>
+
+          {/* Engine jobs badge */}
+          <span
+            className="sketch-pill"
+            style={{
+              padding: "5px 14px",
+              fontSize: 13,
+              fontWeight: 700,
+              borderColor: "#6f97c7",
+              background: "#eaf1fb",
+              color: "#3a5f96",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              textTransform: "uppercase",
+              letterSpacing: "0.03em",
+            }}
+            data-testid="engine-active-jobs-header"
+          >
+            <Bot style={{ width: 14, height: 14 }} />
+            {engineStatus?.activeJobCount ?? 0} engine jobs
+          </span>
+        </div>
+
+        {/* Tab Strip */}
+        <div style={{ maxWidth: 1400, margin: "0 auto", padding: "10px 24px", display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {(["overview", "board", "features", "workflows", "settings"] as ActiveTab[]).map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setActiveTab(tab)}
+              style={{
+                fontFamily: "var(--font-hand)",
+                borderRadius: 999,
+                border: "2px solid #23221f",
+                padding: "7px 22px",
+                fontSize: 15,
+                fontWeight: 600,
+                background: activeTab === tab ? "#23221f" : "transparent",
+                color: activeTab === tab ? "#f6f3ec" : "#23221f",
+                cursor: "pointer",
+                textTransform: "capitalize",
+                opacity: activeTab === tab ? 1 : 0.75,
+                transition: "all 0.1s",
+              }}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      <main style={{ maxWidth: 1400, margin: "0 auto", padding: "24px 24px 48px" }}>
+        {/* Status messages */}
+        {projectMutationError ? (
+          <div style={{ marginBottom: 16, border: "2px solid #d08a7f", background: "#fbeae6", borderRadius: "12px 10px 13px 11px", padding: "10px 14px", color: "#b14b3c", fontSize: 14 }}>
+            {projectMutationError}
+          </div>
+        ) : null}
+        {projectMutationMessage ? (
+          <div style={{ marginBottom: 16, border: "2px solid #86a87d", background: "#eef5ea", borderRadius: "12px 10px 13px 11px", padding: "10px 14px", color: "#4a7340", fontSize: 14 }}>
+            {projectMutationMessage}
+          </div>
+        ) : null}
+
+        {/* ===== OVERVIEW TAB ===== */}
+        {activeTab === "overview" && (
+          <div>
+            <h1 style={{ fontFamily: "var(--font-caveat)", fontSize: 48, fontWeight: 700, color: "#23221f", marginBottom: 6 }}>
+              Overview
+            </h1>
+            <p style={{ color: "#6f6d67", fontSize: 16, marginBottom: 32 }}>
+              {selectedProject?.name ?? "No project selected"}{" "}
+              {selectedProject ? "· " + (selectedProject.repoPath || "no path") : ""}
+            </p>
+
+            {/* Counter tiles */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 14, marginBottom: 32 }}>
+              {counters.map((counter) => (
+                <button
+                  key={counter.label}
+                  type="button"
+                  onClick={() => {
+                    if (counter.id) {
+                      changeBoardQuickFilter(boardQuickFilter === counter.id ? "all" : counter.id);
+                      setActiveTab("board");
+                    }
+                  }}
+                  data-testid={`dashboard-filter-${counter.id}`}
+                  className="sketch-card"
+                  style={{
+                    padding: "16px 18px",
+                    textAlign: "left",
+                    cursor: counter.id ? "pointer" : "default",
+                    border: boardQuickFilter === counter.id ? "2px solid #6f97c7" : undefined,
+                    background: boardQuickFilter === counter.id ? "#eaf1fb" : undefined,
+                  }}
                 >
-                  {reason}
-                </span>
+                  <p style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", color: "#6f6d67", letterSpacing: "0.07em" }}>
+                    {counter.label}
+                  </p>
+                  <p style={{ fontFamily: "var(--font-caveat)", fontSize: 42, fontWeight: 700, color: "#23221f", marginTop: 4 }}>
+                    {counter.value}
+                  </p>
+                </button>
               ))}
             </div>
+
+            {/* Two-column body */}
+            <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 24 }}>
+              {/* Get started card */}
+              <div className="sketch-card" style={{ padding: 0, overflow: "hidden" }}>
+                <div style={{ padding: "14px 20px", borderBottom: "2px dashed #ddd9cd" }}>
+                  <p style={{ fontFamily: "var(--font-caveat)", fontSize: 20, fontWeight: 700, color: "#23221f", letterSpacing: 0 }}>
+                    Get started — 4 steps
+                  </p>
+                </div>
+                {[
+                  {
+                    done: Boolean(selectedProject),
+                    label: "Connect a repository",
+                    actionLabel: "Settings",
+                    tab: "settings" as ActiveTab,
+                  },
+                  {
+                    done: visibleFeatures.length > 0,
+                    label: "Create a feature",
+                    actionLabel: "Features",
+                    tab: "features" as ActiveTab,
+                  },
+                  {
+                    done: visibleTasks.length > 0,
+                    label: "Generate tasks from the spec",
+                    actionLabel: "Features",
+                    tab: "features" as ActiveTab,
+                  },
+                  {
+                    done: engineStatus?.scheduler.status === "running",
+                    label: "Turn on the Loop Engine",
+                    actionLabel: "Workflows",
+                    tab: "workflows" as ActiveTab,
+                  },
+                ].map((step, i) => (
+                  <div
+                    key={i}
+                    className="sketch-divider"
+                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", gap: 12 }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <div style={{
+                        width: 24, height: 24, borderRadius: "50%", flexShrink: 0, border: "2px solid",
+                        borderColor: step.done ? "#86a87d" : "#9a978f",
+                        background: step.done ? "#86a87d" : "transparent",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                      }}>
+                        {step.done ? (
+                          <span style={{ color: "#fff", fontSize: 13, fontWeight: 700 }}>✓</span>
+                        ) : null}
+                      </div>
+                      <span style={{ fontSize: 16, color: step.done ? "#9a978f" : "#23221f", textDecoration: step.done ? "line-through" : "none" }}>
+                        {step.label}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab(step.tab)}
+                      style={{ fontSize: 14, color: step.done ? "#9a978f" : "#3a5f96", background: "none", border: "none", cursor: "pointer", flexShrink: 0, fontFamily: "var(--font-hand)" }}
+                    >
+                      {step.actionLabel} →
+                    </button>
+                  </div>
+                ))}
+                <div style={{ padding: "14px 20px", borderTop: "2px dashed #ddd9cd", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  <span style={{ fontSize: 14, color: "#6f6d67", alignSelf: "center" }}>Jump to:</span>
+                  {(["board", "features", "workflows"] as ActiveTab[]).map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setActiveTab(tab)}
+                      className="sketch-pill"
+                      style={{ fontSize: 14, padding: "5px 16px", border: "2px solid #23221f", background: "transparent", color: "#23221f", cursor: "pointer", textTransform: "capitalize", fontFamily: "var(--font-hand)" }}
+                    >
+                      {tab}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Right column */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                {/* Latest workflow run */}
+                <div className="sketch-card-b" style={{ padding: "18px 20px" }}>
+                  <p style={{ fontFamily: "var(--font-caveat)", fontSize: 20, fontWeight: 700, color: "#23221f", marginBottom: 12 }}>
+                    Latest Workflow Run
+                  </p>
+                  {latestProjectWorkflowRun ? (
+                    <>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                        <span className="sketch-pill" style={{ padding: "3px 12px", fontSize: 13, fontWeight: 700, borderColor: "#6f97c7", background: "#eaf1fb", color: "#3a5f96" }}>
+                          {latestProjectWorkflowRun.status}
+                        </span>
+                      </div>
+                      <p style={{ fontSize: 16, color: "#23221f", fontWeight: 600, marginBottom: 4 }}>
+                        {latestProjectWorkflowRun.currentNodeId ?? "complete"}
+                      </p>
+                      <p style={{ fontSize: 14, color: "#6f6d67" }}>
+                        {formatTimestamp(latestProjectWorkflowRun.updatedAt)}
+                      </p>
+                    </>
+                  ) : (
+                    <p style={{ fontSize: 15, color: "#9a978f" }}>No workflow runs recorded.</p>
+                  )}
+                </div>
+
+                {/* Project metrics */}
+                <div className="sketch-card-c" style={{ padding: "18px 20px" }}>
+                  <p style={{ fontFamily: "var(--font-caveat)", fontSize: 20, fontWeight: 700, color: "#23221f", marginBottom: 12 }}>
+                    Project Metrics
+                  </p>
+                  <section data-testid="project-metrics" style={{ display: "grid", gap: 12 }}>
+                    <MetricGroup title="Tasks By Status" metrics={projectStatusMetrics} />
+                  </section>
+                </div>
+              </div>
+            </div>
           </div>
-          <ProjectHealth
-            project={selectedProject}
-            githubConnection={githubConnection}
-            githubLabelSetup={githubLabelSetup}
-            isCheckingGitHub={isCheckingGitHub}
-            isSettingUpGitHubLabels={isSettingUpGitHubLabels}
-            onCheckGitHub={checkSelectedProjectGitHubConnection}
-            onSetupGitHubLabels={setupSelectedProjectGitHubLabels}
-          />
-          <LoopEnginePanel
-            project={selectedProject}
-            engineStatus={engineStatus}
-            backendAvailability={backendAvailability}
-            isLoadingBackendAvailability={isLoadingBackendAvailability}
-            isLoading={isLoadingEngineStatus}
-            engineAction={engineAction}
-            engineError={engineError}
-            engineMessage={engineMessage}
-            globalAutoRunEnabled={boardData.automationSettings.globalAutoRunEnabled}
-            automationPolicyMessage={effectiveAutomationPolicy.message}
-            latestWorkflowRun={latestProjectWorkflowRun}
-            onRunDemoJob={() => void runEngineDemoJob()}
-            onTickOnce={() => void tickEngineOnce()}
-            onStartScheduler={() => void startEngineSchedulerAction()}
-            onStopScheduler={() => void stopEngineSchedulerAction()}
-            onRefresh={() => {
-              void loadEngineStatus(selectedProject?.id);
-              void loadBackendAvailability(selectedProject?.id);
-            }}
-            onWorkflowResumed={() => {
-              void loadBoard(selectedProject?.id);
-            }}
-          />
-          {projectMode !== "idle" ? (
+        )}
+
+        {/* ===== BOARD TAB ===== */}
+        {activeTab === "board" && (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, gap: 12, flexWrap: "wrap" }}>
+              <div>
+                <h1 style={{ fontFamily: "var(--font-caveat)", fontSize: 38, fontWeight: 700, color: "#23221f", marginBottom: 2 }}>
+                  Task Board
+                </h1>
+                <p style={{ color: "#6f6d67", fontSize: 14 }}>
+                  {selectedFeature?.name ? `Feature: ${selectedFeature.name}` : "All features"}
+                </p>
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  onClick={reloadBoard}
+                  className="sketch-pill"
+                  style={{ border: "2px solid #23221f", padding: "6px 16px", fontSize: 13, fontWeight: 600, background: "transparent", color: "#23221f", cursor: "pointer", fontFamily: "var(--font-hand)" }}
+                >
+                  <ListRestart style={{ display: "inline", width: 14, height: 14, marginRight: 5, verticalAlign: "middle" }} />
+                  Reload
+                </button>
+                <button
+                  type="button"
+                  onClick={startCreateFeature}
+                  className="sketch-pill"
+                  style={{ border: "2px solid #23221f", padding: "6px 16px", fontSize: 13, fontWeight: 600, background: "#23221f", color: "#f6f3ec", cursor: "pointer", fontFamily: "var(--font-hand)" }}
+                >
+                  <Plus style={{ display: "inline", width: 14, height: 14, marginRight: 5, verticalAlign: "middle" }} />
+                  Add task
+                </button>
+              </div>
+            </div>
+
+            {/* Filter chips */}
+            <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+              {(["all", "ai-running", "human-working", "needs-review", "blocked", "ci-failed"] as BoardQuickFilter[]).map((filter) => (
+                <button
+                  key={filter}
+                  type="button"
+                  onClick={() => changeBoardQuickFilter(filter)}
+                  className="sketch-pill"
+                  style={{
+                    border: "2px solid",
+                    borderColor: boardQuickFilter === filter ? "#6f97c7" : "#23221f",
+                    padding: "4px 14px",
+                    fontSize: 13,
+                    background: boardQuickFilter === filter ? "#eaf1fb" : "transparent",
+                    color: boardQuickFilter === filter ? "#3a5f96" : "#23221f",
+                    cursor: "pointer",
+                    opacity: boardQuickFilter === filter ? 1 : 0.65,
+                    textTransform: "capitalize",
+                    fontFamily: "var(--font-hand)",
+                  }}
+                >
+                  {filter === "all" ? "All" : filter === "ai-running" ? "AI Owned" : filter === "human-working" ? "Mine" : filter === "needs-review" ? "Review" : filter === "blocked" ? "Blocked" : "CI Failed"}
+                </button>
+              ))}
+            </div>
+
+            {mutationError ? (
+              <div style={{ marginBottom: 12, border: "2px solid #d08a7f", background: "#fbeae6", borderRadius: "10px 8px 11px 9px", padding: "10px 14px", color: "#b14b3c", fontSize: 14 }}>
+                {mutationError}
+              </div>
+            ) : null}
+
+            {/* Board + task detail */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16, alignItems: "start" }}>
+              {/* Kanban */}
+              <div className="sketch-card" style={{ padding: 0, overflow: "hidden" }}>
+                <DndContext id="loopboard-kanban" sensors={sensors} onDragEnd={handleDragEnd}>
+                  <div className="min-w-0 overflow-x-auto" data-board-scroll>
+                    {loadError ? (
+                      <BoardMessage
+                        title="Persisted board could not load"
+                        message={loadError}
+                        actionLabel="Try again"
+                        onAction={reloadBoard}
+                      />
+                    ) : isLoadingBoard && visibleTasks.length === 0 ? (
+                      <BoardMessage
+                        title="Loading persisted board"
+                        message="Reading projects, features, tasks, and event history from the local SQLite database."
+                      />
+                    ) : !selectedProject ? (
+                      <BoardMessage
+                        title="No project selected"
+                        message="Create a project to connect a local repository, configure automation policy, and start linking feature work."
+                        actionLabel="Create project"
+                        onAction={startCreateProject}
+                      />
+                    ) : visibleFeatures.length === 0 ? (
+                      <BoardMessage
+                        title="No feature selected"
+                        message="Create a feature for this project before importing Spec Kit tasks or running the execution board."
+                        actionLabel="Create feature"
+                        onAction={startCreateFeature}
+                      />
+                    ) : visibleTasks.length === 0 ? (
+                      <BoardMessage
+                        title="No tasks found"
+                        message={`The selected feature, ${selectedFeature?.name ?? "this feature"}, does not have persisted tasks yet. Import Spec Kit tasks from the feature panel or add tasks through the local persistence flow.`}
+                        actionLabel="Preview Spec Kit tasks"
+                        onAction={() => void previewSelectedSpecKitTasks()}
+                      />
+                    ) : filteredVisibleTasks.length === 0 ? (
+                      <BoardMessage
+                        title="No tasks match this filter"
+                        message={`The ${compactText(boardQuickFilter)} filter has no matching tasks for the selected project.`}
+                        actionLabel="Show all tasks"
+                        onAction={() => changeBoardQuickFilter("all")}
+                      />
+                    ) : (
+                      <div className="flex min-w-max">
+                        {KANBAN_COLUMNS.map((column) => (
+                          <BoardColumn
+                            key={column.id}
+                            id={column.id}
+                            label={column.label}
+                            tasks={groupedTasks[column.id]}
+                            featuresById={featuresById}
+                            selectedTaskId={selectedTask?.id ?? ""}
+                            taskRunJobsByTaskId={taskRunJobsByTaskId}
+                            onSelectTask={selectTask}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </DndContext>
+              </div>
+
+              {/* Task detail panel */}
+              <aside className="sketch-card-b" style={{ padding: 16, position: "sticky", top: 16, maxHeight: "calc(100vh - 2rem)", overflowY: "auto" }}>
+                {contextError ? (
+                  <div style={{ marginBottom: 12, border: "2px solid #d08a7f", background: "#fbeae6", borderRadius: "8px 6px 9px 7px", padding: "8px 12px", color: "#b14b3c", fontSize: 13 }}>
+                    {contextError}
+                  </div>
+                ) : null}
+                {contextMessage ? (
+                  <div style={{ marginBottom: 12, border: "2px solid #86a87d", background: "#eef5ea", borderRadius: "8px 6px 9px 7px", padding: "8px 12px", color: "#4a7340", fontSize: 13 }}>
+                    {contextMessage}
+                  </div>
+                ) : null}
+                {selectedTask ? (
+                  <div>
+                    <div className="flex min-w-0 items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold uppercase text-slate-500">
+                          {statusLabel(selectedTask.status)}
+                        </p>
+                        <h2 className="mt-1 text-lg font-semibold leading-6 text-slate-950 [overflow-wrap:anywhere]">
+                          {selectedTask.title}
+                        </h2>
+                      </div>
+                      {selectedTask.status === "done" ? (
+                        <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" />
+                      ) : selectedTask.status === "blocked" ? (
+                        <AlertTriangle className="h-5 w-5 shrink-0 text-orange-600" />
+                      ) : null}
+                    </div>
+
+                    <p className="mt-3 text-sm leading-6 text-slate-600">
+                      {selectedTask.description}
+                    </p>
+
+                    {featuresById.get(selectedTask.featureId) ? (
+                      <section className="mt-4 border border-slate-200 bg-slate-50 p-3">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <h3 className="text-xs font-semibold uppercase text-slate-500">
+                              Linked Feature
+                            </h3>
+                            <p className="mt-1 truncate text-sm font-semibold text-slate-950">
+                              {featuresById.get(selectedTask.featureId)?.name}
+                            </p>
+                          </div>
+                          <span className="border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-700">
+                            {featureStatusLabel(featuresById.get(selectedTask.featureId)!.status)}
+                          </span>
+                        </div>
+                        <FeatureCompletenessBar feature={featuresById.get(selectedTask.featureId)!} />
+                      </section>
+                    ) : null}
+
+                    <div className="mt-4 flex flex-wrap gap-1.5">
+                      <MetaPill icon={ownerIcon[selectedTask.owner]} text={selectedTask.owner} />
+                      <MetaPill icon={PauseCircle} text={selectedTask.mode} />
+                      <MetaPill icon={ImportIcon} text={selectedTask.source} />
+                      <span className={clsx("border px-1.5 py-0.5 text-[10px] font-semibold uppercase", riskStyle(selectedTask.risk))}>
+                        {selectedTask.risk}
+                      </span>
+                    </div>
+
+                    <div className="mt-4 grid gap-2 text-xs">
+                      <MetaLine icon={GitBranch} text={selectedTask.branch} />
+                      <MetaLine
+                        icon={Hash}
+                        text={
+                          selectedWorkspaceUsesFallback
+                            ? "worktree not configured; using repo"
+                            : selectedTask.worktree
+                        }
+                      />
+                    </div>
+
+                    <section className="mt-5">
+                      <h3 className="text-xs font-semibold uppercase text-slate-500">
+                        Local Workspace
+                      </h3>
+                      <div className="mt-2 grid gap-2 border border-slate-200 bg-slate-50 p-3">
+                        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-[11px] font-semibold uppercase text-slate-500">
+                              {selectedWorkspaceUsesFallback ? "Repo fallback" : "Worktree path"}
+                            </p>
+                            <p className="mt-1 truncate font-mono text-sm font-semibold text-slate-900">
+                              {selectedWorkspacePath || "No local path configured"}
+                            </p>
+                          </div>
+                          <span
+                            className={clsx(
+                              "shrink-0 border px-1.5 py-0.5 text-[10px] font-semibold uppercase",
+                              selectedWorkspaceUsesFallback
+                                ? "border-amber-200 bg-amber-50 text-amber-800"
+                                : "border-emerald-200 bg-emerald-50 text-emerald-800",
+                            )}
+                          >
+                            {selectedWorkspaceUsesFallback ? "repo fallback" : "worktree"}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                          <button
+                            type="button"
+                            onClick={() => void openSelectedTask("open-worktree-vscode")}
+                            disabled={taskOpenAction.length > 0 || !selectedRepoPath}
+                            className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <Code2 className="h-4 w-4 shrink-0" />
+                            <span className="min-w-0 truncate">Open Worktree in VS Code</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void openSelectedTask("open-repo-vscode")}
+                            disabled={taskOpenAction.length > 0 || !selectedRepoPath}
+                            className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <FolderGit2 className="h-4 w-4 shrink-0" />
+                            <span className="min-w-0 truncate">Open Repo in VS Code</span>
+                          </button>
+                        </div>
+                      </div>
+                      <div className="mt-3 grid gap-2">
+                        {selectedRepoPath ? (
+                          <CopyValueRow
+                            label="repo path"
+                            value={selectedRepoPath}
+                            badge="repo"
+                            href={fileHref(selectedRepoPath)}
+                            onCopy={copyContextPath}
+                          />
+                        ) : null}
+                        {selectedWorkspacePath ? (
+                          <CopyValueRow
+                            label={selectedWorkspaceUsesFallback ? "worktree path fallback" : "worktree path"}
+                            value={selectedWorkspacePath}
+                            badge={selectedWorkspaceUsesFallback ? "fallback" : "worktree"}
+                            href={fileHref(selectedWorkspacePath)}
+                            onCopy={copyContextPath}
+                          />
+                        ) : null}
+                      </div>
+                    </section>
+
+                    {selectedTask.source === "spec-kit" ? (
+                      <section className="mt-5">
+                        <h3 className="text-xs font-semibold uppercase text-slate-500">
+                          Spec Kit Source
+                        </h3>
+                        <div className="mt-2 grid gap-2 border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+                          {selectedTaskImportEvent?.metadata?.sourceId ? (
+                            <MetaLine icon={Hash} text={`source task ${selectedTaskImportEvent.metadata.sourceId}`} />
+                          ) : null}
+                          {selectedTaskImportEvent?.metadata?.sourceLine ? (
+                            <MetaLine icon={FileText} text={`line ${selectedTaskImportEvent.metadata.sourceLine}`} />
+                          ) : null}
+                          {selectedTaskImportEvent?.metadata?.tasksPath ? (
+                            <MetaLine icon={FileText} text={String(selectedTaskImportEvent.metadata.tasksPath)} />
+                          ) : null}
+                          {!selectedTaskImportEvent ? (
+                            <p className="text-xs leading-5 text-slate-500">
+                              No import event metadata is attached to this task.
+                            </p>
+                          ) : null}
+                        </div>
+                      </section>
+                    ) : null}
+
+                    <section className="mt-5">
+                      <h3 className="text-xs font-semibold uppercase text-slate-500">GitHub Delivery</h3>
+                      <div className="mt-2 grid gap-2 border border-slate-200 bg-slate-50 p-3">
+                        <div className="flex flex-wrap gap-1.5">
+                          {selectedTask.github.pullRequestNumber ? (
+                            <MetaPill icon={GitPullRequest} text={`pr ${selectedTask.github.pullRequestNumber}`} />
+                          ) : (
+                            <span className="border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-600">no pr</span>
+                          )}
+                          {selectedTask.github.ciStatus ? (
+                            <span className={clsx("border px-1.5 py-0.5 text-[10px] font-semibold uppercase", healthTone[selectedTask.github.ciStatus])}>
+                              ci {compactText(selectedTask.github.ciStatus)}
+                            </span>
+                          ) : null}
+                          {selectedTask.github.reviewStatus ? (
+                            <span className={clsx("border px-1.5 py-0.5 text-[10px] font-semibold uppercase", reviewTone[selectedTask.github.reviewStatus])}>
+                              review {compactText(selectedTask.github.reviewStatus)}
+                            </span>
+                          ) : null}
+                        </div>
+                        {selectedTask.github.ciFailureSummary ? (
+                          <div className="border border-red-200 bg-red-50 p-2 text-xs leading-5 text-red-800">
+                            <p className="font-semibold uppercase">Latest CI Failure</p>
+                            <p className="mt-1 [overflow-wrap:anywhere]">{selectedTask.github.ciFailureSummary}</p>
+                          </div>
+                        ) : null}
+                      </div>
+                    </section>
+
+                    <section className="mt-5" data-testid="task-engine-status">
+                      <h3 className="text-xs font-semibold uppercase text-slate-500">Engine Status</h3>
+                      <div className="mt-2 grid gap-2 border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+                        {selectedTaskEngineJob ? (
+                          <>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className={clsx("inline-flex border px-1.5 py-0.5 text-[10px] font-semibold uppercase", engineJobStatusStyles[selectedTaskEngineJob.status])}>
+                                {compactText(selectedTaskEngineJob.status)}
+                              </span>
+                              <MetaPill icon={Bot} text={selectedTaskEngineJob.backend} />
+                              <MetaPill icon={Hash} text={`attempt ${selectedTaskEngineJob.attempt}/${selectedTaskEngineJob.maxAttempts}`} />
+                            </div>
+                            <MetaLine icon={Hash} text={selectedTaskEngineJob.id} />
+                            <p className="text-xs leading-5 text-slate-600">
+                              {selectedTaskEngineJob.lastLogMessage ?? `${selectedTaskEngineJob.logCount} log entries`}
+                            </p>
+                            {selectedTaskEngineJob.error ? (
+                              <p className="text-xs leading-5 text-red-700">{selectedTaskEngineJob.error}</p>
+                            ) : null}
+                          </>
+                        ) : (
+                          <p className="text-xs leading-5 text-slate-500">No task-run engine job recorded for this task yet.</p>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => void handleRunTaskLoop()}
+                          disabled={engineAction.length > 0 || taskLoopPickupPolicy?.kind !== "allow"}
+                          title={taskLoopPickupPolicy?.kind === "allow" ? "Enqueue a manual task-run job for this task." : taskLoopPickupPolicy?.message ?? "Task is not eligible for engine pickup."}
+                          className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+                          data-testid="run-task-loop-button"
+                        >
+                          <Play className={clsx("h-4 w-4 shrink-0", engineAction === "task-loop" && "animate-pulse")} />
+                          <span className="min-w-0 truncate">Run with Engine</span>
+                        </button>
+                        {taskLoopPickupPolicy && taskLoopPickupPolicy.kind !== "allow" ? (
+                          <p className="text-xs leading-5 text-amber-800">{taskLoopPickupPolicy.message}</p>
+                        ) : null}
+                        {taskLoopError ? (
+                          <p className="text-xs leading-5 text-red-700">{taskLoopError}</p>
+                        ) : null}
+                        {taskLoopMessage ? (
+                          <p className="text-xs leading-5 text-emerald-800">{taskLoopMessage}</p>
+                        ) : null}
+                      </div>
+                    </section>
+
+                    <section className="mt-5">
+                      <h3 className="text-xs font-semibold uppercase text-slate-500">Actions</h3>
+                      <label className="mt-2 grid gap-1.5 border border-slate-200 bg-slate-50 p-3">
+                        <span className="text-[11px] font-semibold uppercase text-slate-500">Return handoff note</span>
+                        <textarea
+                          value={returnAiHandoffNote}
+                          onChange={(event) => setReturnAiHandoffNote(event.target.value)}
+                          rows={3}
+                          className="min-h-20 w-full resize-y border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-800 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                          placeholder="Optional note for the next AI pass"
+                        />
+                      </label>
+                      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                        {(() => {
+                          const projectHasGitHubRepo = Boolean(selectedProject?.githubRepository);
+                          const hasGitHubIssue = Boolean(selectedTask.github.issueNumber || selectedTask.github.issueUrl);
+                          const hasGitHubPullRequest = Boolean(selectedTask.github.pullRequestNumber || selectedTask.github.pullRequestUrl);
+                          const isAoReady = selectedTask.github.issueLabels?.includes("ao-ready") ?? false;
+                          const requiresAoApproval = selectedTask.risk !== "low" && !selectedTask.github.aoReadyApprovedAt;
+                          const githubMutationDisabled = mutatingTaskId === selectedTask.id || !projectHasGitHubRepo;
+
+                          return (
+                            <>
+                              <button type="button" onClick={handleCreateGitHubIssue} disabled={mutatingTaskId === selectedTask.id || hasGitHubIssue || !projectHasGitHubRepo} className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50">
+                                <Hash className="h-4 w-4 shrink-0" /><span className="min-w-0 truncate">Create GitHub Issue</span>
+                              </button>
+                              <button type="button" onClick={handleOpenGitHubIssue} disabled={!selectedTask.github.issueUrl} className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50">
+                                <ExternalLink className="h-4 w-4 shrink-0" /><span className="min-w-0 truncate">Open Issue</span>
+                              </button>
+                              <button type="button" onClick={handleOpenGitHubPullRequest} disabled={!selectedTask.github.pullRequestUrl} className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50">
+                                <GitPullRequest className="h-4 w-4 shrink-0" /><span className="min-w-0 truncate">Open PR</span>
+                              </button>
+                              <button type="button" onClick={() => void handleSyncGitHubIssueLabels()} disabled={githubMutationDisabled || !hasGitHubIssue} className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50">
+                                <RefreshCw className="h-4 w-4 shrink-0" /><span className="min-w-0 truncate">Sync Issue Labels</span>
+                              </button>
+                              <button type="button" onClick={() => void handleSyncGitHubPullRequest()} disabled={githubMutationDisabled} className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50">
+                                <RefreshCw className="h-4 w-4 shrink-0" /><span className="min-w-0 truncate">Sync PR/CI</span>
+                              </button>
+                              <button type="button" onClick={handleMarkAoReady} disabled={githubMutationDisabled || !hasGitHubIssue || isAoReady || requiresAoApproval} className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50">
+                                <Bot className="h-4 w-4 shrink-0" /><span className="min-w-0 truncate">Mark AO Ready</span>
+                              </button>
+                              <button type="button" onClick={handleRemoveAoReady} disabled={githubMutationDisabled || !hasGitHubIssue || !isAoReady} className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-red-200 bg-white px-2 py-2 text-xs font-semibold text-red-700 hover:border-red-300 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50">
+                                <X className="h-4 w-4 shrink-0" /><span className="min-w-0 truncate">Remove AO Ready</span>
+                              </button>
+                            </>
+                          );
+                        })()}
+                        {taskActions.map((action) => {
+                          const ActionIcon = action.icon;
+                          const isAoApproval = action.id === "approve-ao-ready";
+                          const hasGitHubIssue = Boolean(selectedTask.github.issueNumber || selectedTask.github.issueUrl);
+                          const isAoReady = selectedTask.github.issueLabels?.includes("ao-ready") ?? false;
+                          const approvalDisabled = isAoApproval && (!hasGitHubIssue || selectedTask.risk === "low" || isAoReady || Boolean(selectedTask.github.aoReadyApprovedAt));
+
+                          return (
+                            <button
+                              key={action.id}
+                              type="button"
+                              onClick={() => handleTaskAction(action.id)}
+                              disabled={mutatingTaskId === selectedTask.id || approvalDisabled}
+                              className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <ActionIcon className="h-4 w-4 shrink-0" />
+                              <span className="min-w-0 truncate">{action.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </section>
+
+                    <section className="mt-5">
+                      <h3 className="text-xs font-semibold uppercase text-slate-500">Context Files</h3>
+                      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                        <button type="button" onClick={() => handleContextAction("export-events")} disabled={contextAction.length > 0} className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50">
+                          <FileDown className="h-4 w-4 shrink-0" /><span className="min-w-0 truncate">Export events</span>
+                        </button>
+                        <button type="button" onClick={() => handleContextAction("refresh-handoff")} disabled={contextAction.length > 0} className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50">
+                          <RefreshCw className="h-4 w-4 shrink-0" /><span className="min-w-0 truncate">Refresh handoff</span>
+                        </button>
+                      </div>
+                      <div className="mt-3 grid gap-2">
+                        {contextStatus ? (
+                          <>
+                            <ContextPathRow label="task.md" path={contextStatus.files.task.path} exists={contextStatus.files.task.exists} onCopy={copyContextPath} />
+                            <ContextPathRow label="context.md" path={contextStatus.files.context.path} exists={contextStatus.files.context.exists} onCopy={copyContextPath} />
+                            <ContextPathRow label="handoff.md" path={contextStatus.files.handoff.path} exists={contextStatus.files.handoff.exists} onCopy={copyContextPath} />
+                            <ContextPathRow label="events.jsonl" path={contextStatus.files.events.path} exists={contextStatus.files.events.exists} onCopy={copyContextPath} />
+                          </>
+                        ) : (
+                          <p className="text-xs leading-5 text-slate-500">Generated file paths are loading.</p>
+                        )}
+                      </div>
+                    </section>
+
+                    <section className="mt-5">
+                      <div className="flex items-center justify-between gap-3">
+                        <h3 className="text-xs font-semibold uppercase text-slate-500">Handoff Editor</h3>
+                        {handoffIsDirty ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold uppercase text-amber-700">
+                            <AlertTriangle className="h-3.5 w-3.5" />Unsaved
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="mt-2 grid gap-3 border border-slate-200 bg-slate-50 p-3">
+                        <textarea
+                          value={handoffContent}
+                          onChange={(event) => setHandoffContent(event.target.value)}
+                          rows={12}
+                          disabled={handoffAction === "load"}
+                          className="sketch-mono min-h-72 w-full resize-y border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-800 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100 disabled:cursor-wait disabled:opacity-60"
+                          placeholder="Load or refresh handoff.md to edit it here."
+                        />
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                          <button type="button" onClick={() => void saveSelectedHandoff()} disabled={!selectedTask || handoffAction.length > 0 || !handoffIsDirty} className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50">
+                            <Save className="h-4 w-4 shrink-0" /><span className="min-w-0 truncate">Save handoff.md</span>
+                          </button>
+                          <button type="button" onClick={() => selectedTask ? void loadTaskHandoffDocument(selectedTask.id) : undefined} disabled={!selectedTask || handoffAction.length > 0} className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50">
+                            <RefreshCw className="h-4 w-4 shrink-0" /><span className="min-w-0 truncate">Reload handoff.md</span>
+                          </button>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="mt-5">
+                      <h3 className="text-xs font-semibold uppercase text-slate-500">Claude Code Prompt</h3>
+                      <div className="mt-2 grid gap-3 border border-slate-200 bg-slate-50 p-3">
+                        <label className="grid gap-1.5">
+                          <span className="text-[11px] font-semibold uppercase text-slate-500">Manual edit intent</span>
+                          <textarea
+                            value={claudePromptIntent}
+                            onChange={(event) => { setClaudePromptIntent(event.target.value); setClaudePrompt(null); }}
+                            rows={3}
+                            className="min-h-20 w-full resize-y border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-800 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                            placeholder="Optional short note for Claude Code"
+                          />
+                        </label>
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                          <button type="button" onClick={() => void generateClaudePrompt()} disabled={claudePromptAction.length > 0} className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50">
+                            <Bot className="h-4 w-4 shrink-0" /><span className="min-w-0 truncate">{claudePrompt ? "Refresh Claude Prompt" : "Generate Claude Prompt"}</span>
+                          </button>
+                          <button type="button" onClick={() => void copyClaudePrompt()} disabled={claudePromptAction.length > 0 || !claudePrompt} className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50">
+                            <Copy className="h-4 w-4 shrink-0" /><span className="min-w-0 truncate">Copy Claude Code Prompt</span>
+                          </button>
+                        </div>
+                        <div className="border border-slate-200 bg-white">
+                          <pre className="sketch-mono max-h-72 overflow-auto whitespace-pre-wrap p-3 text-xs leading-5 text-slate-700 [overflow-wrap:anywhere]">
+                            {claudePrompt?.prompt ?? "Generate a prompt to preview the exact Claude Code instructions."}
+                          </pre>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="mt-5">
+                      <h3 className="text-xs font-semibold uppercase text-slate-500">
+                        {selectedTask.source === "spec-kit" ? "Source Artifact Paths" : "Context Paths"}
+                      </h3>
+                      <div className="mt-2 grid gap-2">
+                        {selectedTaskSourceArtifacts.map((path) => (
+                          <SourceArtifactRow key={path} path={path} onCopy={copyContextPath} />
+                        ))}
+                        {selectedTaskSourceArtifacts.length === 0 ? (
+                          <p className="text-xs leading-5 text-slate-500">
+                            {selectedTask.source === "spec-kit" ? "No source artifact paths are attached to this task." : "No context paths are attached to this task."}
+                          </p>
+                        ) : null}
+                      </div>
+                    </section>
+
+                    <section className="mt-5">
+                      <h3 className="text-xs font-semibold uppercase text-slate-500">Acceptance Criteria</h3>
+                      <ul className="mt-2 grid gap-2 text-sm leading-5 text-slate-700">
+                        {selectedTask.acceptanceCriteria.map((criterion) => (
+                          <li key={criterion} className="flex gap-2">
+                            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+                            <span className="[overflow-wrap:anywhere]">{criterion}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+
+                    <section className="mt-5">
+                      <h3 className="text-xs font-semibold uppercase text-slate-500">Chronological Events</h3>
+                      <div className="mt-2 grid gap-2">
+                        {groupEventTimeline(selectedTask.events).map((group) => (
+                          <div key={group.id} className="border border-slate-200 bg-slate-50 p-2">
+                            <p className="text-xs font-semibold text-slate-800">
+                              {group.type === "GITHUB_SYNC" ? `github sync (${group.events.length})` : compactText(group.type)}
+                            </p>
+                            <div className="mt-1 grid gap-1 text-xs leading-5 text-slate-600">
+                              {group.events.map((event) => (
+                                <p key={event.id} className="[overflow-wrap:anywhere]">
+                                  {group.events.length > 1 ? <span className="font-semibold uppercase text-slate-500">{compactText(event.type)}: </span> : null}
+                                  {event.message}
+                                </p>
+                              ))}
+                            </div>
+                            {group.links.length > 0 ? (
+                              <div className="mt-2 flex flex-wrap gap-1.5">
+                                {group.links.map((link) => (
+                                  <a key={`${link.label}-${link.url}`} href={link.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-600 hover:border-sky-200 hover:text-sky-700">
+                                    <ExternalLink className="h-3 w-3" />{link.label}
+                                  </a>
+                                ))}
+                              </div>
+                            ) : null}
+                            <p className="mt-1 text-[11px] text-slate-500">{formatTimestamp(group.createdAt)} - {group.actor}</p>
+                          </div>
+                        ))}
+                        {selectedTask.events.length === 0 ? (
+                          <p className="text-xs leading-5 text-slate-500">No events have been recorded for this task.</p>
+                        ) : null}
+                      </div>
+                    </section>
+                  </div>
+                ) : (
+                  <BoardMessage
+                    title="No task selected"
+                    message={isLoadingBoard ? "Loading the first persisted task." : "Select a task card to inspect its local event history and handoff context."}
+                  />
+                )}
+              </aside>
+            </div>
+          </div>
+        )}
+
+        {/* ===== FEATURES TAB ===== */}
+        {activeTab === "features" && (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, gap: 12, flexWrap: "wrap" }}>
+              <div>
+                <h1 style={{ fontFamily: "var(--font-caveat)", fontSize: 38, fontWeight: 700, color: "#23221f", marginBottom: 2 }}>
+                  Features &amp; Artifacts
+                </h1>
+                <p style={{ color: "#6f6d67", fontSize: 14 }}>Manage feature specs, plans, and task imports</p>
+              </div>
+              <button
+                type="button"
+                onClick={startCreateFeature}
+                className="sketch-pill"
+                style={{ border: "2px solid #23221f", padding: "7px 18px", fontSize: 14, fontWeight: 600, background: "#23221f", color: "#f6f3ec", cursor: "pointer", fontFamily: "var(--font-hand)", display: "inline-flex", alignItems: "center", gap: 6 }}
+              >
+                <Plus style={{ width: 15, height: 15 }} />
+                Add feature
+              </button>
+            </div>
+
+            {featureMutationError ? (
+              <div style={{ marginBottom: 12, border: "2px solid #d08a7f", background: "#fbeae6", borderRadius: "10px 8px 11px 9px", padding: "10px 14px", color: "#b14b3c", fontSize: 14 }}>
+                {featureMutationError}
+              </div>
+            ) : null}
+            {featureMutationMessage ? (
+              <div style={{ marginBottom: 12, border: "2px solid #86a87d", background: "#eef5ea", borderRadius: "10px 8px 11px 9px", padding: "10px 14px", color: "#4a7340", fontSize: 14 }}>
+                {featureMutationMessage}
+              </div>
+            ) : null}
+
+            {/* Lifecycle strip */}
+            {selectedFeature ? (
+              <div className="sketch-card" style={{ padding: "10px 16px", marginBottom: 20, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                {(["prd-draft", "spec-review", "spec-approved", "plan-review", "plan-approved", "tasks-ready", "in-execution", "done"] as FeatureStatus[]).map((status, i, arr) => {
+                  const isActive = selectedFeature.status === status;
+                  const isDone = featureStatuses.indexOf(selectedFeature.status) > featureStatuses.indexOf(status);
+                  return (
+                    <span key={status} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <span
+                        className="sketch-pill"
+                        style={{
+                          padding: "3px 10px", fontSize: 12, fontWeight: 600,
+                          borderColor: isDone ? "#86a87d" : isActive ? "#6f97c7" : "#9a978f",
+                          background: isDone ? "#eef5ea" : isActive ? "#eaf1fb" : "transparent",
+                          color: isDone ? "#4a7340" : isActive ? "#3a5f96" : "#6f6d67",
+                        }}
+                      >
+                        {featureStatusLabel(status)}
+                      </span>
+                      {i < arr.length - 1 ? <span style={{ color: "#9a978f", fontSize: 14 }}>→</span> : null}
+                    </span>
+                  );
+                })}
+              </div>
+            ) : null}
+
+            <FeaturePanel
+              features={visibleFeatures}
+              selectedFeature={selectedFeature}
+              selectedArtifactName={selectedArtifactName}
+              artifactDocument={artifactDocument}
+              artifactContent={artifactContent}
+              artifactIsDirty={artifactIsDirty}
+              artifactIsLoading={isLoadingArtifact}
+              artifactIsSaving={isSavingArtifact}
+              artifactError={artifactError}
+              artifactMessage={artifactMessage}
+              approvingArtifactName={approvingArtifactName}
+              importPreview={importPreview}
+              importPreviewTasks={importPreviewTasks}
+              isImportPreviewLoading={isImportPreviewLoading}
+              isImportingSpecKitTasks={isImportingSpecKitTasks}
+              importError={importError}
+              importMessage={importMessage}
+              onSelect={selectFeature}
+              onCreate={startCreateFeature}
+              onEdit={startEditFeature}
+              onDelete={removeSelectedFeature}
+              onSelectArtifact={selectArtifact}
+              onArtifactContentChange={updateArtifactContent}
+              onReloadArtifact={() => void reloadSelectedArtifact()}
+              onSaveArtifact={() => void saveSelectedArtifact()}
+              onApproveArtifact={(artifactName) => void approveSelectedFeatureArtifact(artifactName)}
+              onPreviewSpecKitTasks={() => void previewSelectedSpecKitTasks()}
+              onCancelSpecKitImport={cancelSpecKitImport}
+              onImportSpecKitTasks={() => void importSelectedSpecKitTasks()}
+              onToggleSpecKitTask={toggleSpecKitPreviewTask}
+              onChangeSpecKitTask={changeSpecKitPreviewTask}
+            />
+          </div>
+        )}
+
+        {/* ===== WORKFLOWS TAB (includes Engine) ===== */}
+        {activeTab === "workflows" && (
+          <div>
+            <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 20, gap: 16, flexWrap: "wrap" }}>
+              <div>
+                <h1 style={{ fontFamily: "var(--font-caveat)", fontSize: 48, fontWeight: 700, color: "#23221f", marginBottom: 4 }}>
+                  Workflows
+                </h1>
+                <p style={{ color: "#6f6d67", fontSize: 16 }}>
+                  Design, run, and approve multi-step automation workflows
+                </p>
+              </div>
+              {/* Inline auto-run toggle */}
+              <button
+                type="button"
+                onClick={() => void toggleGlobalAutoRun(!boardData.automationSettings.globalAutoRunEnabled)}
+                className="sketch-pill"
+                style={{
+                  border: "2px solid",
+                  borderColor: boardData.automationSettings.globalAutoRunEnabled ? "#86a87d" : "#d08a7f",
+                  padding: "7px 18px", fontSize: 14, fontWeight: 700,
+                  background: boardData.automationSettings.globalAutoRunEnabled ? "#eef5ea" : "#fbeae6",
+                  color: boardData.automationSettings.globalAutoRunEnabled ? "#4a7340" : "#b14b3c",
+                  cursor: "pointer", fontFamily: "var(--font-hand)",
+                  display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0,
+                }}
+              >
+                <ShieldAlert style={{ width: 15, height: 15 }} />
+                {boardData.automationSettings.globalAutoRunEnabled ? "Auto-run ON — turn off" : "Auto-run OFF — turn on ▸"}
+              </button>
+            </div>
+
+            {/* Workflow editor — full width */}
+            <div className="sketch-card" style={{ padding: 16, marginBottom: 20 }}>
+              <WorkflowEditor
+                project={selectedProject}
+                selectedFeature={selectedFeature}
+                automationSettings={boardData.automationSettings}
+              />
+            </div>
+
+            {/* Engine panel + Policy — two columns below editor */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 20, alignItems: "start" }}>
+              <LoopEnginePanel
+                project={selectedProject}
+                engineStatus={engineStatus}
+                backendAvailability={backendAvailability}
+                isLoadingBackendAvailability={isLoadingBackendAvailability}
+                isLoading={isLoadingEngineStatus}
+                engineAction={engineAction}
+                engineError={engineError}
+                engineMessage={engineMessage}
+                globalAutoRunEnabled={boardData.automationSettings.globalAutoRunEnabled}
+                automationPolicyMessage={effectiveAutomationPolicy.message}
+                latestWorkflowRun={latestProjectWorkflowRun}
+                onRunDemoJob={() => void runEngineDemoJob()}
+                onTickOnce={() => void tickEngineOnce()}
+                onStartScheduler={() => void startEngineSchedulerAction()}
+                onStopScheduler={() => void stopEngineSchedulerAction()}
+                onRefresh={() => {
+                  void loadEngineStatus(selectedProject?.id);
+                  void loadBackendAvailability(selectedProject?.id);
+                }}
+                onWorkflowResumed={() => {
+                  void loadBoard(selectedProject?.id);
+                }}
+              />
+              <div className="sketch-card-b" style={{ padding: 16 }}>
+                <p style={{ fontFamily: "var(--font-caveat)", fontSize: 20, fontWeight: 700, color: "#23221f", marginBottom: 12 }}>
+                  Automation Policy
+                </p>
+                <p style={{ fontSize: 14, fontWeight: 600, color: "#23221f", marginBottom: 8 }}>
+                  {effectiveAutomationPolicy.message}
+                </p>
+                <div style={{ display: "grid", gap: 6 }}>
+                  {effectiveAutomationPolicy.reasons.map((reason) => (
+                    <div key={reason} className="sketch-divider" style={{ paddingTop: 6, paddingBottom: 2, fontSize: 13, color: "#6f6d67" }}>
+                      {reason}
+                    </div>
+                  ))}
+                </div>
+                <div style={{ marginTop: 16 }}>
+                  <section data-testid="project-metrics">
+                    <MetricGroup title="Engine (24h)" metrics={projectEngineMetrics} emptyHint={projectEngineMetricsEmptyHint} />
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ===== SETTINGS TAB ===== */}
+        {activeTab === "settings" && (
+          <div>
+            <h1 style={{ fontFamily: "var(--font-caveat)", fontSize: 38, fontWeight: 700, color: "#23221f", marginBottom: 4 }}>
+              Settings
+            </h1>
+            <p style={{ color: "#6f6d67", fontSize: 14, marginBottom: 24 }}>
+              Project configuration, repository health, and backend availability
+            </p>
+
+            {/* Project actions */}
+            <div className="sketch-card" style={{ padding: 16, marginBottom: 20 }}>
+              <p style={{ fontFamily: "var(--font-caveat)", fontSize: 20, fontWeight: 700, color: "#23221f", marginBottom: 12 }}>
+                Project Actions
+              </p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                <button type="button" onClick={startCreateProject} className="sketch-pill" style={{ border: "2px solid #23221f", padding: "6px 16px", fontSize: 13, background: "#23221f", color: "#f6f3ec", cursor: "pointer", fontFamily: "var(--font-hand)", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  <Plus style={{ width: 14, height: 14 }} />Add project
+                </button>
+                {selectedProject ? (
+                  <>
+                    <button type="button" onClick={startEditProject} className="sketch-pill" style={{ border: "2px solid #23221f", padding: "6px 16px", fontSize: 13, background: "transparent", color: "#23221f", cursor: "pointer", fontFamily: "var(--font-hand)", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <Pencil style={{ width: 14, height: 14 }} />Edit project
+                    </button>
+                    <button type="button" onClick={() => void openSelectedProject("open-folder")} disabled={projectOpenAction.length > 0} className="sketch-pill" style={{ border: "2px solid #23221f", padding: "6px 16px", fontSize: 13, background: "transparent", color: "#23221f", cursor: "pointer", fontFamily: "var(--font-hand)", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <FolderOpen style={{ width: 14, height: 14 }} />Open Folder
+                    </button>
+                    <button type="button" onClick={() => void openSelectedProject("open-vscode")} disabled={projectOpenAction.length > 0} className="sketch-pill" style={{ border: "2px solid #23221f", padding: "6px 16px", fontSize: 13, background: "transparent", color: "#23221f", cursor: "pointer", fontFamily: "var(--font-hand)", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <Code2 style={{ width: 14, height: 14 }} />Open VS Code
+                    </button>
+                    <button type="button" onClick={removeSelectedProject} disabled={isSavingProject} className="sketch-pill" style={{ border: "2px solid #d08a7f", padding: "6px 16px", fontSize: 13, background: "#fbeae6", color: "#b14b3c", cursor: "pointer", fontFamily: "var(--font-hand)", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <Trash2 style={{ width: 14, height: 14 }} />Delete project
+                    </button>
+                  </>
+                ) : null}
+                <button type="button" onClick={reloadBoard} className="sketch-pill" style={{ border: "2px solid #23221f", padding: "6px 16px", fontSize: 13, background: "transparent", color: "#23221f", cursor: "pointer", fontFamily: "var(--font-hand)", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  <ListRestart style={{ width: 14, height: 14 }} />Reload data
+                </button>
+              </div>
+            </div>
+
+            {/* Backend availability + Project Health */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+              <div className="sketch-card-b" style={{ padding: 16 }}>
+                <p style={{ fontFamily: "var(--font-caveat)", fontSize: 20, fontWeight: 700, color: "#23221f", marginBottom: 12 }}>
+                  Backend Availability
+                </p>
+                {backendAvailability ? (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {backendAvailability.backends.map((chip) => (
+                        <div key={chip.backend} className="sketch-divider" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: 8, paddingBottom: 2 }}>
+                          <span style={{ fontSize: 14, color: "#23221f" }}>{chip.backend}</span>
+                          <span className="sketch-pill" style={{ padding: "2px 10px", fontSize: 12, fontWeight: 700, borderColor: chip.available ? "#86a87d" : "#d3a64e", background: chip.available ? "#eef5ea" : "#fbf2dd", color: chip.available ? "#4a7340" : "#9a6a1c" }}>
+                            {chip.available ? "available" : "not connected"}
+                          </span>
+                        </div>
+                      ))}
+                    <button
+                      type="button"
+                      onClick={() => void loadBackendAvailability(selectedProject?.id)}
+                      disabled={isLoadingBackendAvailability}
+                      className="sketch-pill"
+                      style={{ marginTop: 8, border: "2px solid #23221f", padding: "5px 14px", fontSize: 13, background: "transparent", color: "#23221f", cursor: "pointer", fontFamily: "var(--font-hand)", display: "inline-flex", alignItems: "center", gap: 5 }}
+                    >
+                      <RefreshCw style={{ width: 13, height: 13, ...(isLoadingBackendAvailability ? { animation: "spin 1s linear infinite" } : {}) }} />
+                      Re-detect backends
+                    </button>
+                  </div>
+                ) : (
+                  <p style={{ fontSize: 14, color: "#9a978f" }}>No backend availability data. Select a project first.</p>
+                )}
+              </div>
+
+              <div className="sketch-card-c" style={{ padding: 16 }}>
+                <p style={{ fontFamily: "var(--font-caveat)", fontSize: 20, fontWeight: 700, color: "#23221f", marginBottom: 12 }}>
+                  Repository &amp; GitHub
+                </p>
+                <ProjectHealth
+                  project={selectedProject}
+                  githubConnection={githubConnection}
+                  githubLabelSetup={githubLabelSetup}
+                  isCheckingGitHub={isCheckingGitHub}
+                  isSettingUpGitHubLabels={isSettingUpGitHubLabels}
+                  onCheckGitHub={checkSelectedProjectGitHubConnection}
+                  onSetupGitHubLabels={setupSelectedProjectGitHubLabels}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* ===== OVERLAY FORMS ===== */}
+      {projectMode !== "idle" ? (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(35,34,31,0.4)", zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div className="sketch-card" style={{ width: "min(640px, 90vw)", maxHeight: "90vh", overflowY: "auto", padding: 24 }}>
             <ProjectForm
               mode={projectMode}
               form={projectForm}
@@ -5309,18 +6356,12 @@ export default function Home() {
               onCancel={() => setProjectMode("idle")}
               isSaving={isSavingProject}
             />
-          ) : null}
-          {featureMutationError ? (
-            <div className="border border-red-200 bg-red-50 p-3 text-sm leading-6 text-red-800">
-              {featureMutationError}
-            </div>
-          ) : null}
-          {featureMutationMessage ? (
-            <div className="border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-emerald-800">
-              {featureMutationMessage}
-            </div>
-          ) : null}
-          {featureMode !== "idle" ? (
+          </div>
+        </div>
+      ) : null}
+      {featureMode !== "idle" ? (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(35,34,31,0.4)", zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div className="sketch-card" style={{ width: "min(640px, 90vw)", maxHeight: "90vh", overflowY: "auto", padding: 24 }}>
             <FeatureForm
               mode={featureMode}
               form={featureForm}
@@ -5329,1123 +6370,9 @@ export default function Home() {
               onCancel={() => setFeatureMode("idle")}
               isSaving={isSavingFeature}
             />
-          ) : null}
-          <FeaturePanel
-            features={visibleFeatures}
-            selectedFeature={selectedFeature}
-            selectedArtifactName={selectedArtifactName}
-            artifactDocument={artifactDocument}
-            artifactContent={artifactContent}
-            artifactIsDirty={artifactIsDirty}
-            artifactIsLoading={isLoadingArtifact}
-            artifactIsSaving={isSavingArtifact}
-            artifactError={artifactError}
-            artifactMessage={artifactMessage}
-            approvingArtifactName={approvingArtifactName}
-            importPreview={importPreview}
-            importPreviewTasks={importPreviewTasks}
-            isImportPreviewLoading={isImportPreviewLoading}
-            isImportingSpecKitTasks={isImportingSpecKitTasks}
-            importError={importError}
-            importMessage={importMessage}
-            onSelect={selectFeature}
-            onCreate={startCreateFeature}
-            onEdit={startEditFeature}
-            onDelete={removeSelectedFeature}
-            onSelectArtifact={selectArtifact}
-            onArtifactContentChange={updateArtifactContent}
-            onReloadArtifact={() => void reloadSelectedArtifact()}
-            onSaveArtifact={() => void saveSelectedArtifact()}
-            onApproveArtifact={(artifactName) =>
-              void approveSelectedFeatureArtifact(artifactName)
-            }
-            onPreviewSpecKitTasks={() => void previewSelectedSpecKitTasks()}
-            onCancelSpecKitImport={cancelSpecKitImport}
-            onImportSpecKitTasks={() => void importSelectedSpecKitTasks()}
-            onToggleSpecKitTask={toggleSpecKitPreviewTask}
-            onChangeSpecKitTask={changeSpecKitPreviewTask}
-          />
-          <WorkflowEditor
-            project={selectedProject}
-            selectedFeature={selectedFeature}
-            automationSettings={boardData.automationSettings}
-          />
-        </div>
-      </header>
-
-      <div className="mx-auto grid max-w-[112rem] gap-4 px-4 py-4 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,23rem)] lg:px-6">
-        <DndContext id="loopboard-kanban" sensors={sensors} onDragEnd={handleDragEnd}>
-          <div
-            className="min-w-0 overflow-x-auto border border-slate-200 bg-white"
-            data-board-scroll
-          >
-            {loadError ? (
-              <BoardMessage
-                title="Persisted board could not load"
-                message={loadError}
-                actionLabel="Try again"
-                onAction={reloadBoard}
-              />
-            ) : isLoadingBoard && visibleTasks.length === 0 ? (
-              <BoardMessage
-                title="Loading persisted board"
-                message="Reading projects, features, tasks, and event history from the local SQLite database."
-              />
-            ) : !selectedProject ? (
-              <BoardMessage
-                title="No project selected"
-                message="Create a project to connect a local repository, configure automation policy, and start linking feature work."
-                actionLabel="Create project"
-                onAction={startCreateProject}
-              />
-            ) : visibleFeatures.length === 0 ? (
-              <BoardMessage
-                title="No feature selected"
-                message="Create a feature for this project before importing Spec Kit tasks or running the execution board."
-                actionLabel="Create feature"
-                onAction={startCreateFeature}
-              />
-            ) : visibleTasks.length === 0 ? (
-              <BoardMessage
-                title="No tasks found"
-                message={`The selected feature, ${selectedFeature?.name ?? "this feature"}, does not have persisted tasks yet. Import Spec Kit tasks from the feature panel or add tasks through the local persistence flow.`}
-                actionLabel="Preview Spec Kit tasks"
-                onAction={() => void previewSelectedSpecKitTasks()}
-              />
-            ) : filteredVisibleTasks.length === 0 ? (
-              <BoardMessage
-                title="No tasks match this filter"
-                message={`The ${compactText(boardQuickFilter)} filter has no matching tasks for the selected project.`}
-                actionLabel="Show all tasks"
-                onAction={() => changeBoardQuickFilter("all")}
-              />
-            ) : (
-              <div className="flex min-w-max">
-                {KANBAN_COLUMNS.map((column) => (
-                  <BoardColumn
-                    key={column.id}
-                    id={column.id}
-                    label={column.label}
-                    tasks={groupedTasks[column.id]}
-                    featuresById={featuresById}
-                    selectedTaskId={selectedTask?.id ?? ""}
-                    taskRunJobsByTaskId={taskRunJobsByTaskId}
-                    onSelectTask={selectTask}
-                  />
-                ))}
-              </div>
-            )}
           </div>
-        </DndContext>
-
-        <aside className="min-w-0 border border-slate-200 bg-white p-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto">
-          {mutationError ? (
-            <div className="mb-4 border border-red-200 bg-red-50 p-3 text-sm leading-6 text-red-800">
-              {mutationError}
-            </div>
-          ) : null}
-          {contextError ? (
-            <div className="mb-4 border border-red-200 bg-red-50 p-3 text-sm leading-6 text-red-800">
-              {contextError}
-            </div>
-          ) : null}
-          {contextMessage ? (
-            <div className="mb-4 border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-emerald-800">
-              {contextMessage}
-            </div>
-          ) : null}
-          {selectedTask ? (
-            <div>
-              <div className="flex min-w-0 items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-xs font-semibold uppercase text-slate-500">
-                    {statusLabel(selectedTask.status)}
-                  </p>
-                  <h2 className="mt-1 text-lg font-semibold leading-6 text-slate-950 [overflow-wrap:anywhere]">
-                    {selectedTask.title}
-                  </h2>
-                </div>
-                {selectedTask.status === "done" ? (
-                  <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" />
-                ) : selectedTask.status === "blocked" ? (
-                  <AlertTriangle className="h-5 w-5 shrink-0 text-orange-600" />
-                ) : null}
-              </div>
-
-              <p className="mt-3 text-sm leading-6 text-slate-600">
-                {selectedTask.description}
-              </p>
-
-              {featuresById.get(selectedTask.featureId) ? (
-                <section className="mt-4 border border-slate-200 bg-slate-50 p-3">
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <h3 className="text-xs font-semibold uppercase text-slate-500">
-                        Linked Feature
-                      </h3>
-                      <p className="mt-1 truncate text-sm font-semibold text-slate-950">
-                        {featuresById.get(selectedTask.featureId)?.name}
-                      </p>
-                    </div>
-                    <span className="border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-700">
-                      {featureStatusLabel(featuresById.get(selectedTask.featureId)!.status)}
-                    </span>
-                  </div>
-                  <FeatureCompletenessBar feature={featuresById.get(selectedTask.featureId)!} />
-                </section>
-              ) : null}
-
-              <div className="mt-4 flex flex-wrap gap-1.5">
-                <MetaPill icon={ownerIcon[selectedTask.owner]} text={selectedTask.owner} />
-                <MetaPill icon={PauseCircle} text={selectedTask.mode} />
-                <MetaPill icon={ImportIcon} text={selectedTask.source} />
-                <span className={clsx("border px-1.5 py-0.5 text-[10px] font-semibold uppercase", riskStyle(selectedTask.risk))}>
-                  {selectedTask.risk}
-                </span>
-              </div>
-
-              <div className="mt-4 grid gap-2 text-xs">
-                <MetaLine icon={GitBranch} text={selectedTask.branch} />
-                <MetaLine
-                  icon={Hash}
-                  text={
-                    selectedWorkspaceUsesFallback
-                      ? "worktree not configured; using repo"
-                      : selectedTask.worktree
-                  }
-                />
-              </div>
-
-              <section className="mt-5">
-                <h3 className="text-xs font-semibold uppercase text-slate-500">
-                  Local Workspace
-                </h3>
-                <div className="mt-2 grid gap-2 border border-slate-200 bg-slate-50 p-3">
-                  <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="text-[11px] font-semibold uppercase text-slate-500">
-                        {selectedWorkspaceUsesFallback ? "Repo fallback" : "Worktree path"}
-                      </p>
-                      <p className="mt-1 truncate font-mono text-sm font-semibold text-slate-900">
-                        {selectedWorkspacePath || "No local path configured"}
-                      </p>
-                    </div>
-                    <span
-                      className={clsx(
-                        "shrink-0 border px-1.5 py-0.5 text-[10px] font-semibold uppercase",
-                        selectedWorkspaceUsesFallback
-                          ? "border-amber-200 bg-amber-50 text-amber-800"
-                          : "border-emerald-200 bg-emerald-50 text-emerald-800",
-                      )}
-                    >
-                      {selectedWorkspaceUsesFallback ? "repo fallback" : "worktree"}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
-                    <button
-                      type="button"
-                      onClick={() => void openSelectedTask("open-worktree-vscode")}
-                      disabled={taskOpenAction.length > 0 || !selectedRepoPath}
-                      className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
-                      title={
-                        selectedWorkspaceUsesFallback
-                          ? "Open the repository in VS Code because this task has no worktree path."
-                          : "Open the configured task worktree in VS Code."
-                      }
-                    >
-                      <Code2 className="h-4 w-4 shrink-0" />
-                      <span className="min-w-0 truncate">Open Worktree in VS Code</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void openSelectedTask("open-repo-vscode")}
-                      disabled={taskOpenAction.length > 0 || !selectedRepoPath}
-                      className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
-                      title="Open the project repository in VS Code."
-                    >
-                      <FolderGit2 className="h-4 w-4 shrink-0" />
-                      <span className="min-w-0 truncate">Open Repo in VS Code</span>
-                    </button>
-                  </div>
-                </div>
-                <div className="mt-3 grid gap-2">
-                  {selectedRepoPath ? (
-                    <CopyValueRow
-                      label="repo path"
-                      value={selectedRepoPath}
-                      badge="repo"
-                      href={fileHref(selectedRepoPath)}
-                      onCopy={copyContextPath}
-                    />
-                  ) : null}
-                  {selectedWorkspacePath ? (
-                    <CopyValueRow
-                      label={
-                        selectedWorkspaceUsesFallback
-                          ? "worktree path fallback"
-                          : "worktree path"
-                      }
-                      value={selectedWorkspacePath}
-                      badge={selectedWorkspaceUsesFallback ? "fallback" : "worktree"}
-                      href={fileHref(selectedWorkspacePath)}
-                      onCopy={copyContextPath}
-                    />
-                  ) : null}
-                </div>
-              </section>
-
-              {selectedTask.source === "spec-kit" ? (
-                <section className="mt-5">
-                  <h3 className="text-xs font-semibold uppercase text-slate-500">
-                    Spec Kit Source
-                  </h3>
-                  <div className="mt-2 grid gap-2 border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
-                    {selectedTaskImportEvent?.metadata?.sourceId ? (
-                      <MetaLine
-                        icon={Hash}
-                        text={`source task ${selectedTaskImportEvent.metadata.sourceId}`}
-                      />
-                    ) : null}
-                    {selectedTaskImportEvent?.metadata?.sourceLine ? (
-                      <MetaLine
-                        icon={FileText}
-                        text={`line ${selectedTaskImportEvent.metadata.sourceLine}`}
-                      />
-                    ) : null}
-                    {selectedTaskImportEvent?.metadata?.tasksPath ? (
-                      <MetaLine
-                        icon={FileText}
-                        text={String(selectedTaskImportEvent.metadata.tasksPath)}
-                      />
-                    ) : null}
-                    {!selectedTaskImportEvent ? (
-                      <p className="text-xs leading-5 text-slate-500">
-                        No import event metadata is attached to this task.
-                      </p>
-                    ) : null}
-                  </div>
-                </section>
-              ) : null}
-
-              <section className="mt-5">
-                <h3 className="text-xs font-semibold uppercase text-slate-500">
-                  GitHub Delivery
-                </h3>
-                <div className="mt-2 grid gap-2 border border-slate-200 bg-slate-50 p-3">
-                  <div className="flex flex-wrap gap-1.5">
-                    {selectedTask.github.pullRequestNumber ? (
-                      <MetaPill
-                        icon={GitPullRequest}
-                        text={`pr ${selectedTask.github.pullRequestNumber}`}
-                      />
-                    ) : (
-                      <span className="border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-600">
-                        no pr
-                      </span>
-                    )}
-                    {selectedTask.github.deliveryStatus ? (
-                      <span className="border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-700">
-                        {compactText(selectedTask.github.deliveryStatus)}
-                      </span>
-                    ) : null}
-                    {selectedTask.github.ciStatus ? (
-                      <span
-                        className={clsx(
-                          "border px-1.5 py-0.5 text-[10px] font-semibold uppercase",
-                          healthTone[selectedTask.github.ciStatus],
-                        )}
-                      >
-                        ci {compactText(selectedTask.github.ciStatus)}
-                      </span>
-                    ) : null}
-                    {selectedTask.github.reviewStatus ? (
-                      <span
-                        className={clsx(
-                          "border px-1.5 py-0.5 text-[10px] font-semibold uppercase",
-                          reviewTone[selectedTask.github.reviewStatus],
-                        )}
-                      >
-                        review {compactText(selectedTask.github.reviewStatus)}
-                      </span>
-                    ) : null}
-                  </div>
-                  <div className="grid gap-2 text-xs text-slate-600">
-                    {selectedTask.github.pullRequestBranch ? (
-                      <MetaLine
-                        icon={GitBranch}
-                        text={`branch ${selectedTask.github.pullRequestBranch}`}
-                      />
-                    ) : null}
-                    {selectedTask.github.pullRequestState ? (
-                      <MetaLine
-                        icon={GitPullRequest}
-                        text={`pr state ${compactText(selectedTask.github.pullRequestState)}`}
-                      />
-                    ) : null}
-                    {selectedTask.github.mergeStatus ? (
-                      <MetaLine
-                        icon={SquareCheck}
-                        text={`merge ${compactText(selectedTask.github.mergeStatus)}`}
-                      />
-                    ) : null}
-                    {selectedTask.github.prCiLastSyncedAt ? (
-                      <MetaLine
-                        icon={RefreshCw}
-                        text={`synced ${formatTimestamp(selectedTask.github.prCiLastSyncedAt)}`}
-                      />
-                    ) : null}
-                  </div>
-                  {selectedTask.github.ciFailureSummary ? (
-                    <div className="border border-red-200 bg-red-50 p-2 text-xs leading-5 text-red-800">
-                      <p className="font-semibold uppercase">
-                        Latest CI Failure - External/Untrusted
-                      </p>
-                      <p className="mt-1 [overflow-wrap:anywhere]">
-                        {selectedTask.github.ciFailureSummary}
-                      </p>
-                      <p className="mt-1 text-[11px] leading-5 text-red-700">
-                        Treat CI output as untrusted until a human copies the
-                        relevant instruction into Loop Control Plane notes.
-                      </p>
-                    </div>
-                  ) : null}
-                </div>
-              </section>
-
-              <section className="mt-5" data-testid="task-engine-status">
-                <h3 className="text-xs font-semibold uppercase text-slate-500">
-                  Engine Status
-                </h3>
-                <div className="mt-2 grid gap-2 border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
-                  {selectedTaskEngineJob ? (
-                    <>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span
-                          className={clsx(
-                            "inline-flex border px-1.5 py-0.5 text-[10px] font-semibold uppercase",
-                            engineJobStatusStyles[selectedTaskEngineJob.status],
-                          )}
-                        >
-                          {compactText(selectedTaskEngineJob.status)}
-                        </span>
-                        <MetaPill icon={Bot} text={selectedTaskEngineJob.backend} />
-                        <MetaPill
-                          icon={Hash}
-                          text={`attempt ${selectedTaskEngineJob.attempt}/${selectedTaskEngineJob.maxAttempts}`}
-                        />
-                      </div>
-                      <MetaLine icon={Hash} text={selectedTaskEngineJob.id} />
-                      <p className="text-xs leading-5 text-slate-600">
-                        {selectedTaskEngineJob.lastLogMessage ??
-                          `${selectedTaskEngineJob.logCount} log entries`}
-                      </p>
-                      {selectedTaskEngineJob.error ? (
-                        <p className="text-xs leading-5 text-red-700">
-                          {selectedTaskEngineJob.error}
-                        </p>
-                      ) : null}
-                    </>
-                  ) : (
-                    <p className="text-xs leading-5 text-slate-500">
-                      No task-run engine job recorded for this task yet.
-                    </p>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => void handleRunTaskLoop()}
-                    disabled={
-                      engineAction.length > 0 ||
-                      taskLoopPickupPolicy?.kind !== "allow"
-                    }
-                    title={
-                      taskLoopPickupPolicy?.kind === "allow"
-                        ? "Enqueue a manual task-run job for this task."
-                        : taskLoopPickupPolicy?.message ??
-                          "Task is not eligible for engine pickup."
-                    }
-                    className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
-                    data-testid="run-task-loop-button"
-                  >
-                    <Play
-                      className={clsx(
-                        "h-4 w-4 shrink-0",
-                        engineAction === "task-loop" && "animate-pulse",
-                      )}
-                    />
-                    <span className="min-w-0 truncate">Run with Engine</span>
-                  </button>
-                  {selectedProject?.engineSettings.agentOrchestrator?.dashboardUrl ? (
-                    <a
-                      href={selectedProject.engineSettings.agentOrchestrator.dashboardUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-sky-800 hover:border-sky-300 hover:bg-sky-50"
-                      data-testid="open-ao-dashboard-link"
-                    >
-                      <ExternalLink className="h-4 w-4 shrink-0" />
-                      <span className="min-w-0 truncate">Open AO Dashboard</span>
-                    </a>
-                  ) : null}
-                  {taskLoopPickupPolicy && taskLoopPickupPolicy.kind !== "allow" ? (
-                    <p className="text-xs leading-5 text-amber-800">
-                      {taskLoopPickupPolicy.message}
-                    </p>
-                  ) : null}
-                  {taskLoopError ? (
-                    <p className="text-xs leading-5 text-red-700">{taskLoopError}</p>
-                  ) : null}
-                  {taskLoopMessage ? (
-                    <p className="text-xs leading-5 text-emerald-800">{taskLoopMessage}</p>
-                  ) : null}
-                </div>
-              </section>
-
-              <section className="mt-5">
-                <h3 className="text-xs font-semibold uppercase text-slate-500">
-                  Actions
-                </h3>
-                <label className="mt-2 grid gap-1.5 border border-slate-200 bg-slate-50 p-3">
-                  <span className="text-[11px] font-semibold uppercase text-slate-500">
-                    Return handoff note
-                  </span>
-                  <textarea
-                    value={returnAiHandoffNote}
-                    onChange={(event) => setReturnAiHandoffNote(event.target.value)}
-                    rows={3}
-                    className="min-h-20 w-full resize-y border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-800 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
-                    placeholder="Optional note for the next AI pass"
-                  />
-                  <span className="text-xs leading-5 text-slate-500">
-                    Used when returning this task to AI; a default handoff note is
-                    written if left blank.
-                  </span>
-                </label>
-                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
-                  {(() => {
-                    const projectHasGitHubRepo = Boolean(selectedProject?.githubRepository);
-                    const hasGitHubIssue = Boolean(
-                      selectedTask.github.issueNumber || selectedTask.github.issueUrl,
-                    );
-                    const hasGitHubPullRequest = Boolean(
-                      selectedTask.github.pullRequestNumber ||
-                        selectedTask.github.pullRequestUrl,
-                    );
-                    const isAoReady =
-                      selectedTask.github.issueLabels?.includes("ao-ready") ?? false;
-                    const requiresAoApproval =
-                      selectedTask.risk !== "low" && !selectedTask.github.aoReadyApprovedAt;
-                    const githubMutationDisabled =
-                      mutatingTaskId === selectedTask.id || !projectHasGitHubRepo;
-
-                    return (
-                      <>
-                        <button
-                          type="button"
-                          onClick={handleCreateGitHubIssue}
-                          disabled={
-                            mutatingTaskId === selectedTask.id ||
-                            hasGitHubIssue ||
-                            !projectHasGitHubRepo
-                          }
-                          className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
-                          title={
-                            hasGitHubIssue
-                              ? "This task already has a GitHub issue."
-                              : projectHasGitHubRepo
-                                ? "Create a GitHub issue from this task."
-                                : "Configure a GitHub repo in project settings first."
-                          }
-                        >
-                          <Hash className="h-4 w-4 shrink-0" />
-                          <span className="min-w-0 truncate">Create GitHub Issue</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleOpenGitHubIssue}
-                          disabled={!selectedTask.github.issueUrl}
-                          className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
-                          title={
-                            selectedTask.github.issueUrl
-                              ? "Open the linked GitHub issue in a new tab."
-                              : "Create or link a GitHub issue first."
-                          }
-                        >
-                          <ExternalLink className="h-4 w-4 shrink-0" />
-                          <span className="min-w-0 truncate">Open Issue</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleOpenGitHubPullRequest}
-                          disabled={!selectedTask.github.pullRequestUrl}
-                          className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
-                          title={
-                            selectedTask.github.pullRequestUrl
-                              ? "Open the linked GitHub pull request in a new tab."
-                              : "Sync PR/CI to discover or link a pull request first."
-                          }
-                        >
-                          <GitPullRequest className="h-4 w-4 shrink-0" />
-                          <span className="min-w-0 truncate">Open PR</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleSyncGitHubIssueLabels()}
-                          disabled={githubMutationDisabled || !hasGitHubIssue}
-                          className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
-                          title={
-                            !projectHasGitHubRepo
-                              ? "Configure a GitHub repo in project settings first."
-                              : hasGitHubIssue
-                                ? "Recalculate and sync Loop Control Plane labels to the linked issue."
-                                : "Create or link a GitHub issue first."
-                          }
-                        >
-                          <RefreshCw className="h-4 w-4 shrink-0" />
-                          <span className="min-w-0 truncate">Sync Issue Labels</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleSyncGitHubPullRequest()}
-                          disabled={githubMutationDisabled}
-                          className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
-                          title={
-                            !projectHasGitHubRepo
-                              ? "Configure a GitHub repo in project settings first."
-                              : hasGitHubPullRequest
-                                ? "Refresh PR, CI, review, and merge state from GitHub."
-                                : "Discover a linked PR from the issue timeline, branch, or task metadata."
-                          }
-                        >
-                          <RefreshCw className="h-4 w-4 shrink-0" />
-                          <span className="min-w-0 truncate">Sync PR/CI</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleMarkAoReady}
-                          disabled={
-                            githubMutationDisabled ||
-                            !hasGitHubIssue ||
-                            isAoReady ||
-                            requiresAoApproval
-                          }
-                          className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
-                          title={
-                            !projectHasGitHubRepo
-                              ? "Configure a GitHub repo in project settings first."
-                              : !hasGitHubIssue
-                                ? "Create or link a GitHub issue first."
-                                : isAoReady
-                                  ? "This issue already has ao-ready."
-                                  : requiresAoApproval
-                                    ? "Approve AO ready locally before marking this risk level ao-ready."
-                                    : "Apply ao-ready to the linked GitHub issue."
-                          }
-                        >
-                          <Bot className="h-4 w-4 shrink-0" />
-                          <span className="min-w-0 truncate">Mark AO Ready</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleRemoveAoReady}
-                          disabled={githubMutationDisabled || !hasGitHubIssue || !isAoReady}
-                          className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-red-200 bg-white px-2 py-2 text-xs font-semibold text-red-700 hover:border-red-300 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-                          title={
-                            !projectHasGitHubRepo
-                              ? "Configure a GitHub repo in project settings first."
-                              : !hasGitHubIssue
-                                ? "Create or link a GitHub issue first."
-                                : isAoReady
-                                  ? "Remove ao-ready from the linked GitHub issue."
-                                  : "The linked issue is not marked ao-ready."
-                          }
-                        >
-                          <X className="h-4 w-4 shrink-0" />
-                          <span className="min-w-0 truncate">Remove AO Ready</span>
-                        </button>
-                      </>
-                    );
-                  })()}
-                  {taskActions.map((action) => {
-                    const ActionIcon = action.icon;
-                    const isAoApproval = action.id === "approve-ao-ready";
-                    const hasGitHubIssue = Boolean(
-                      selectedTask.github.issueNumber || selectedTask.github.issueUrl,
-                    );
-                    const isAoReady =
-                      selectedTask.github.issueLabels?.includes("ao-ready") ?? false;
-                    const approvalDisabled =
-                      isAoApproval &&
-                      (!hasGitHubIssue ||
-                        selectedTask.risk === "low" ||
-                        isAoReady ||
-                        Boolean(selectedTask.github.aoReadyApprovedAt));
-                    const approvalTitle = !isAoApproval
-                      ? undefined
-                      : !hasGitHubIssue
-                        ? "Create or link a GitHub issue before approving AO ready."
-                        : selectedTask.risk === "low"
-                          ? "Low-risk tasks do not require local AO approval."
-                          : isAoReady
-                            ? "This issue already has the ao-ready label."
-                            : selectedTask.github.aoReadyApprovedAt
-                              ? "AO ready approval is already recorded."
-                              : "Record local approval to allow ao-ready for this risk level.";
-
-                    return (
-                      <button
-                        key={action.id}
-                        type="button"
-                        onClick={() => handleTaskAction(action.id)}
-                        disabled={
-                          mutatingTaskId === selectedTask.id || approvalDisabled
-                        }
-                        title={approvalTitle}
-                        className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <ActionIcon className="h-4 w-4 shrink-0" />
-                        <span className="min-w-0 truncate">{action.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </section>
-
-              <section className="mt-5">
-                <h3 className="text-xs font-semibold uppercase text-slate-500">
-                  Context Files
-                </h3>
-                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => handleContextAction("export-events")}
-                    disabled={contextAction.length > 0}
-                    className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <FileDown className="h-4 w-4 shrink-0" />
-                    <span className="min-w-0 truncate">Export events</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleContextAction("refresh-handoff")}
-                    disabled={contextAction.length > 0}
-                    className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <RefreshCw className="h-4 w-4 shrink-0" />
-                    <span className="min-w-0 truncate">Refresh handoff</span>
-                  </button>
-                </div>
-                <div className="mt-3 grid gap-2">
-                  {contextStatus ? (
-                    <>
-                      <ContextPathRow
-                        label="task.md"
-                        path={contextStatus.files.task.path}
-                        exists={contextStatus.files.task.exists}
-                        onCopy={copyContextPath}
-                      />
-                      <ContextPathRow
-                        label="context.md"
-                        path={contextStatus.files.context.path}
-                        exists={contextStatus.files.context.exists}
-                        onCopy={copyContextPath}
-                      />
-                      <ContextPathRow
-                        label="handoff.md"
-                        path={contextStatus.files.handoff.path}
-                        exists={contextStatus.files.handoff.exists}
-                        onCopy={copyContextPath}
-                      />
-                      <ContextPathRow
-                        label="events.jsonl"
-                        path={contextStatus.files.events.path}
-                        exists={contextStatus.files.events.exists}
-                        onCopy={copyContextPath}
-                      />
-                    </>
-                  ) : (
-                    <p className="text-xs leading-5 text-slate-500">
-                      Generated file paths are loading.
-                    </p>
-                  )}
-                </div>
-              </section>
-
-              <section className="mt-5">
-                <div className="flex items-center justify-between gap-3">
-                  <h3 className="text-xs font-semibold uppercase text-slate-500">
-                    Handoff Editor
-                  </h3>
-                  {handoffIsDirty ? (
-                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold uppercase text-amber-700">
-                      <AlertTriangle className="h-3.5 w-3.5" />
-                      Unsaved
-                    </span>
-                  ) : null}
-                </div>
-                <div className="mt-2 grid gap-3 border border-slate-200 bg-slate-50 p-3">
-                  <div className="flex flex-wrap items-center gap-2 text-[11px] leading-5 text-slate-500">
-                    <span className="border border-slate-200 bg-white px-1.5 py-0.5 font-semibold uppercase text-slate-600">
-                      {handoffDocument?.updatedAt
-                        ? `Updated ${formatTimestamp(handoffDocument.updatedAt)}`
-                        : handoffDocument?.exists === false
-                          ? "handoff.md missing"
-                          : "Loading handoff.md"}
-                    </span>
-                    <span className="border border-sky-200 bg-sky-50 px-1.5 py-0.5 font-semibold uppercase text-sky-700">
-                      Generated: {handoffDocument?.sections.generated.sourceOfTruth ?? "task state"}
-                    </span>
-                    <span className="border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 font-semibold uppercase text-emerald-700">
-                      Human notes:{" "}
-                      {handoffDocument?.sections.humanNotes.sourceOfTruth ?? "manual edits"}
-                    </span>
-                  </div>
-                  <textarea
-                    value={handoffContent}
-                    onChange={(event) => setHandoffContent(event.target.value)}
-                    rows={12}
-                    disabled={handoffAction === "load"}
-                    className="min-h-72 w-full resize-y border border-slate-200 bg-white px-3 py-2 font-mono text-xs leading-5 text-slate-800 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100 disabled:cursor-wait disabled:opacity-60"
-                    placeholder="Load or refresh handoff.md to edit it here."
-                  />
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
-                    <button
-                      type="button"
-                      onClick={() => void saveSelectedHandoff()}
-                      disabled={
-                        !selectedTask ||
-                        handoffAction.length > 0 ||
-                        !handoffIsDirty
-                      }
-                      className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <Save className="h-4 w-4 shrink-0" />
-                      <span className="min-w-0 truncate">Save handoff.md</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        selectedTask
-                          ? void loadTaskHandoffDocument(selectedTask.id)
-                          : undefined
-                      }
-                      disabled={!selectedTask || handoffAction.length > 0}
-                      className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <RefreshCw className="h-4 w-4 shrink-0" />
-                      <span className="min-w-0 truncate">Reload handoff.md</span>
-                    </button>
-                  </div>
-                  <p className="text-[11px] leading-5 text-slate-500">
-                    {handoffDocument
-                      ? `${handoffDocument.sections.generated.refreshBehavior} ${handoffDocument.sections.humanNotes.refreshBehavior}`
-                      : "Generated sections come from Loop Control Plane task state; human notes remain the manual source of truth."}
-                  </p>
-                  <p className="border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] leading-5 text-amber-800">
-                    GitHub comments, PR review text, CI output, terminal output,
-                    and pasted logs are external/untrusted. Saved handoff text is
-                    redacted for token-shaped secrets.
-                  </p>
-                </div>
-              </section>
-
-              <section className="mt-5">
-                <h3 className="text-xs font-semibold uppercase text-slate-500">
-                  Claude Code Prompt
-                </h3>
-                <div className="mt-2 grid gap-3 border border-slate-200 bg-slate-50 p-3">
-                  <label className="grid gap-1.5">
-                    <span className="text-[11px] font-semibold uppercase text-slate-500">
-                      Manual edit intent
-                    </span>
-                    <textarea
-                      value={claudePromptIntent}
-                      onChange={(event) => {
-                        setClaudePromptIntent(event.target.value);
-                        setClaudePrompt(null);
-                      }}
-                      rows={3}
-                      className="min-h-20 w-full resize-y border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-800 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
-                      placeholder="Optional short note for Claude Code"
-                    />
-                  </label>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
-                    <button
-                      type="button"
-                      onClick={() => void generateClaudePrompt()}
-                      disabled={claudePromptAction.length > 0}
-                      className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <Bot className="h-4 w-4 shrink-0" />
-                      <span className="min-w-0 truncate">
-                        {claudePrompt ? "Refresh Claude Prompt" : "Generate Claude Prompt"}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void copyClaudePrompt()}
-                      disabled={claudePromptAction.length > 0 || !claudePrompt}
-                      className="inline-flex min-h-10 min-w-0 items-center justify-center gap-2 border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <Copy className="h-4 w-4 shrink-0" />
-                      <span className="min-w-0 truncate">Copy Claude Code Prompt</span>
-                    </button>
-                  </div>
-                  <div className="border border-slate-200 bg-white">
-                    <pre className="max-h-72 overflow-auto whitespace-pre-wrap p-3 font-mono text-xs leading-5 text-slate-700 [overflow-wrap:anywhere]">
-                      {claudePrompt?.prompt ??
-                        "Generate a prompt to preview the exact Claude Code instructions."}
-                    </pre>
-                  </div>
-                  {claudePrompt ? (
-                    <p className="text-[11px] leading-5 text-slate-500">
-                      Generated {formatTimestamp(claudePrompt.generatedAt)} from{" "}
-                      {claudePrompt.sourceArtifacts.length} source artifact
-                      {claudePrompt.sourceArtifacts.length === 1 ? "" : "s"}.
-                    </p>
-                  ) : null}
-                  <p className="border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] leading-5 text-amber-800">
-                    Claude prompts include trusted Loop Control Plane task, context, and
-                    handoff sections only. External GitHub and CI signals are
-                    labeled untrusted and token-shaped secrets are redacted.
-                  </p>
-                </div>
-              </section>
-
-              <section className="mt-5">
-                <h3 className="text-xs font-semibold uppercase text-slate-500">
-                  Links
-                </h3>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <DetailLink
-                    href={selectedTask.github.issueUrl}
-                    label={
-                      selectedTask.github.issueNumber
-                        ? `Issue #${selectedTask.github.issueNumber}`
-                        : "Issue"
-                    }
-                    icon={Hash}
-                  />
-                  <DetailLink
-                    href={selectedTask.github.pullRequestUrl}
-                    label={
-                      selectedTask.github.pullRequestNumber
-                        ? `PR #${selectedTask.github.pullRequestNumber}`
-                        : "Pull Request"
-                    }
-                    icon={GitPullRequest}
-                  />
-                  {!selectedTask.github.issueUrl && !selectedTask.github.pullRequestUrl ? (
-                    <p className="text-xs leading-5 text-slate-500">
-                      No external links attached.
-                    </p>
-                  ) : null}
-                </div>
-                {selectedTask.github.issueUrl ? (
-                  <div className="mt-3 grid gap-2">
-                    <CopyValueRow
-                      label={
-                        selectedTask.github.issueNumber
-                          ? `issue #${selectedTask.github.issueNumber}`
-                          : "issue"
-                      }
-                      value={selectedTask.github.issueUrl}
-                      badge="github"
-                      href={selectedTask.github.issueUrl}
-                      onCopy={copyContextPath}
-                    />
-                  </div>
-                ) : null}
-                {selectedTask.github.pullRequestUrl ? (
-                  <div className="mt-3 grid gap-2">
-                    <CopyValueRow
-                      label={
-                        selectedTask.github.pullRequestNumber
-                          ? `pr #${selectedTask.github.pullRequestNumber}`
-                          : "pull request"
-                      }
-                      value={selectedTask.github.pullRequestUrl}
-                      badge="github"
-                      href={selectedTask.github.pullRequestUrl}
-                      onCopy={copyContextPath}
-                    />
-                  </div>
-                ) : null}
-                <div className="mt-3 border border-slate-200 bg-slate-50 p-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span
-                      className={clsx(
-                        "border px-1.5 py-0.5 text-[10px] font-semibold uppercase",
-                        aoHandoffState(selectedTask).className,
-                      )}
-                    >
-                      {aoHandoffState(selectedTask).label}
-                    </span>
-                    {selectedTask.github.aoReadyApprovedAt ? (
-                      <span className="text-[10px] font-semibold uppercase text-slate-500">
-                        approved {formatTimestamp(selectedTask.github.aoReadyApprovedAt)}
-                      </span>
-                    ) : null}
-                  </div>
-                  <p className="mt-1 text-xs leading-5 text-slate-600">
-                    {aoHandoffState(selectedTask).message}
-                  </p>
-                </div>
-                {selectedTask.github.issueLabels?.length ? (
-                  <div className="mt-3 flex flex-wrap gap-1">
-                    {selectedTask.github.issueLabels.map((label) => (
-                      <span
-                        key={label}
-                        className="border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-600"
-                      >
-                        {label}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-                {selectedTask.github.issueLastSyncedAt ? (
-                  <p className="mt-2 text-xs leading-5 text-slate-500">
-                    Last GitHub issue sync {formatTimestamp(selectedTask.github.issueLastSyncedAt)}
-                  </p>
-                ) : null}
-              </section>
-
-              <section className="mt-5">
-                <h3 className="text-xs font-semibold uppercase text-slate-500">
-                  Handoff Preview
-                </h3>
-                <div className="mt-2 border border-slate-200 bg-slate-50 p-3">
-                  {selectedTask.handoff.summary ? (
-                    <FileText className="mb-2 h-4 w-4 text-slate-400" />
-                  ) : null}
-                  {selectedTask.handoff.summary ? (
-                    <p className="text-sm leading-6 text-slate-700">
-                      {selectedTask.handoff.summary}
-                    </p>
-                  ) : (
-                    <p className="text-sm leading-6 text-slate-500">
-                      No handoff summary is available yet.
-                    </p>
-                  )}
-                  {selectedTask.handoff.nextAction ? (
-                    <p className="mt-2 text-xs font-semibold uppercase leading-5 text-slate-600">
-                      Next: {selectedTask.handoff.nextAction}
-                    </p>
-                  ) : null}
-                </div>
-              </section>
-
-              <section className="mt-5">
-                <h3 className="text-xs font-semibold uppercase text-slate-500">
-                  {selectedTask.source === "spec-kit"
-                    ? "Source Artifact Paths"
-                    : "Context Paths"}
-                </h3>
-                <div className="mt-2 grid gap-2">
-                  {selectedTaskSourceArtifacts.map((path) => (
-                    <SourceArtifactRow
-                      key={path}
-                      path={path}
-                      onCopy={copyContextPath}
-                    />
-                  ))}
-                  {selectedTaskSourceArtifacts.length === 0 ? (
-                    <p className="text-xs leading-5 text-slate-500">
-                      {selectedTask.source === "spec-kit"
-                        ? "No source artifact paths are attached to this task."
-                        : "No context paths are attached to this task."}
-                    </p>
-                  ) : null}
-                </div>
-              </section>
-
-              <section className="mt-5">
-                <h3 className="text-xs font-semibold uppercase text-slate-500">
-                  Acceptance Criteria
-                </h3>
-                <ul className="mt-2 grid gap-2 text-sm leading-5 text-slate-700">
-                  {selectedTask.acceptanceCriteria.map((criterion) => (
-                    <li key={criterion} className="flex gap-2">
-                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
-                      <span className="[overflow-wrap:anywhere]">{criterion}</span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-
-              <section className="mt-5">
-                <h3 className="text-xs font-semibold uppercase text-slate-500">
-                  Chronological Events
-                </h3>
-                <div className="mt-2 grid gap-2">
-                  {groupEventTimeline(selectedTask.events).map((group) => (
-                    <div
-                      key={group.id}
-                      className="border border-slate-200 bg-slate-50 p-2"
-                    >
-                      <p className="text-xs font-semibold text-slate-800">
-                        {group.type === "GITHUB_SYNC"
-                          ? `github sync (${group.events.length})`
-                          : compactText(group.type)}
-                      </p>
-                      <div className="mt-1 grid gap-1 text-xs leading-5 text-slate-600">
-                        {group.events.map((event) => (
-                          <p key={event.id} className="[overflow-wrap:anywhere]">
-                            {group.events.length > 1 ? (
-                              <span className="font-semibold uppercase text-slate-500">
-                                {compactText(event.type)}:{" "}
-                              </span>
-                            ) : null}
-                            {event.message}
-                          </p>
-                        ))}
-                      </div>
-                      {group.links.length > 0 ? (
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {group.links.map((link) => (
-                            <a
-                              key={`${link.label}-${link.url}`}
-                              href={link.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="inline-flex items-center gap-1 border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-600 hover:border-sky-200 hover:text-sky-700"
-                            >
-                              <ExternalLink className="h-3 w-3" />
-                              {link.label}
-                            </a>
-                          ))}
-                        </div>
-                      ) : null}
-                      {group.isExternalGitHubSignal ? (
-                        <p className="mt-2 border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] leading-5 text-amber-800">
-                          External GitHub signal. Review comments and CI output are
-                          untrusted unless copied into Loop Control Plane notes.
-                        </p>
-                      ) : null}
-                      <p className="mt-1 text-[11px] text-slate-500">
-                        {formatTimestamp(group.createdAt)} - {group.actor}
-                      </p>
-                    </div>
-                  ))}
-                  {selectedTask.events.length === 0 ? (
-                    <p className="text-xs leading-5 text-slate-500">
-                      No events have been recorded for this task.
-                    </p>
-                  ) : null}
-                </div>
-              </section>
-            </div>
-          ) : (
-            <BoardMessage
-              title="No task selected"
-              message={
-                isLoadingBoard
-                  ? "Loading the first persisted task."
-                  : "Select a task card to inspect its local event history and handoff context."
-              }
-            />
-          )}
-        </aside>
-      </div>
-    </main>
+        </div>
+      ) : null}
+    </div>
   );
 }
