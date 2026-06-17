@@ -380,9 +380,11 @@ const opsToD = (ops: Array<{ op: string; data: number[] }>): string =>
     return "";
   }).filter(Boolean).join(" ");
 
-// getBezierPath collapses to a straight line when the control-point offsets are
-// zero — this happens when source and target are at the same height (dy≈0) for
-// horizontal handles, or at the same position for same-direction handles.
+// getBezierPath collapses to a straight line whenever the control-point offset
+// in the primary axis is zero.  This happens for:
+//   • same-direction handles (bottom→bottom, left→left …) always
+//   • opposite-direction vertical handles (bottom→top) when dx ≈ 0
+//   • opposite-direction horizontal handles (left→right) when dy ≈ 0
 // This wrapper forces a minimum arc so the sketch aesthetic always shows a curve.
 const MIN_ARC = 50;
 const getSketchEdgePath = (
@@ -391,23 +393,59 @@ const getSketchEdgePath = (
 ): [string, number, number] => {
   const mx = (sourceX + targetX) / 2;
   const my = (sourceY + targetY) / 2;
+  const dx = Math.abs(targetX - sourceX);
+  const dy = Math.abs(targetY - sourceY);
 
-  // Same-direction handles (bottom→bottom, top→top): getBezierPath collapses to
-  // a straight line because control-point offsets are computed relative to the
-  // midpoint, which equals the source/target Y when dy=0. Force a U/arch shape.
+  // Same-direction vertical handles → U / arch below or above.
   if (sourcePosition === Position.Bottom && targetPosition === Position.Bottom) {
-    const bump = Math.max(MIN_ARC, Math.abs(targetY - sourceY) * 0.4);
-    return [
-      `M ${sourceX} ${sourceY} C ${sourceX} ${sourceY + bump} ${targetX} ${targetY + bump} ${targetX} ${targetY}`,
-      mx, my + bump,
-    ];
+    const bump = Math.max(MIN_ARC, dy * 0.4);
+    return [`M ${sourceX} ${sourceY} C ${sourceX} ${sourceY + bump} ${targetX} ${targetY + bump} ${targetX} ${targetY}`, mx, my + bump];
   }
   if (sourcePosition === Position.Top && targetPosition === Position.Top) {
-    const bump = Math.max(MIN_ARC, Math.abs(targetY - sourceY) * 0.4);
-    return [
-      `M ${sourceX} ${sourceY} C ${sourceX} ${sourceY - bump} ${targetX} ${targetY - bump} ${targetX} ${targetY}`,
-      mx, my - bump,
-    ];
+    const bump = Math.max(MIN_ARC, dy * 0.4);
+    return [`M ${sourceX} ${sourceY} C ${sourceX} ${sourceY - bump} ${targetX} ${targetY - bump} ${targetX} ${targetY}`, mx, my - bump];
+  }
+
+  // Same-direction horizontal handles → D-curve to the left / right.
+  if (sourcePosition === Position.Left && targetPosition === Position.Left) {
+    const bump = Math.max(MIN_ARC, dy * 0.4);
+    return [`M ${sourceX} ${sourceY} C ${sourceX - bump} ${sourceY} ${targetX - bump} ${targetY} ${targetX} ${targetY}`, mx - bump * 0.5, my];
+  }
+  if (sourcePosition === Position.Right && targetPosition === Position.Right) {
+    const bump = Math.max(MIN_ARC, dy * 0.4);
+    return [`M ${sourceX} ${sourceY} C ${sourceX + bump} ${sourceY} ${targetX + bump} ${targetY} ${targetX} ${targetY}`, mx + bump * 0.5, my];
+  }
+
+  // Opposite vertical handles (bottom→top / top→bottom) with nearly the same x:
+  // getBezierPath control points both land at x = sourceX/targetX → straight line.
+  if (
+    (sourcePosition === Position.Bottom && targetPosition === Position.Top) ||
+    (sourcePosition === Position.Top   && targetPosition === Position.Bottom)
+  ) {
+    if (dx < MIN_ARC) {
+      const jog  = MIN_ARC * 0.6;
+      const yDir = sourcePosition === Position.Bottom ? 1 : -1;
+      return [
+        `M ${sourceX} ${sourceY} C ${sourceX + jog} ${sourceY + yDir * dy * 0.25} ${targetX + jog} ${targetY - yDir * dy * 0.25} ${targetX} ${targetY}`,
+        mx + jog * 0.5, my,
+      ];
+    }
+  }
+
+  // Opposite horizontal handles (left→right / right→left) with nearly the same y:
+  // same collapse risk in the vertical axis.
+  if (
+    (sourcePosition === Position.Left  && targetPosition === Position.Right) ||
+    (sourcePosition === Position.Right && targetPosition === Position.Left)
+  ) {
+    if (dy < MIN_ARC) {
+      const jog  = MIN_ARC * 0.6;
+      const xDir = sourcePosition === Position.Left ? 1 : -1;
+      return [
+        `M ${sourceX} ${sourceY} C ${sourceX + xDir * dx * 0.25} ${sourceY + jog} ${targetX - xDir * dx * 0.25} ${targetY + jog} ${targetX} ${targetY}`,
+        mx, my + jog * 0.5,
+      ];
+    }
   }
 
   const [path, lx, ly] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
