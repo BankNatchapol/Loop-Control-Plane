@@ -393,7 +393,6 @@ const getSketchEdgePath = (
 ): [string, number, number] => {
   const mx = (sourceX + targetX) / 2;
   const my = (sourceY + targetY) / 2;
-  const dx = Math.abs(targetX - sourceX);
   const dy = Math.abs(targetY - sourceY);
 
   // Same-direction vertical handles → U / arch below or above.
@@ -416,38 +415,9 @@ const getSketchEdgePath = (
     return [`M ${sourceX} ${sourceY} C ${sourceX + bump} ${sourceY} ${targetX + bump} ${targetY} ${targetX} ${targetY}`, mx + bump * 0.5, my];
   }
 
-  // Opposite vertical handles (bottom→top / top→bottom) with nearly the same x:
-  // getBezierPath control points both land at x = sourceX/targetX → straight line.
-  if (
-    (sourcePosition === Position.Bottom && targetPosition === Position.Top) ||
-    (sourcePosition === Position.Top   && targetPosition === Position.Bottom)
-  ) {
-    if (dx < MIN_ARC) {
-      const jog  = MIN_ARC * 0.6;
-      const yDir = sourcePosition === Position.Bottom ? 1 : -1;
-      return [
-        `M ${sourceX} ${sourceY} C ${sourceX + jog} ${sourceY + yDir * dy * 0.25} ${targetX + jog} ${targetY - yDir * dy * 0.25} ${targetX} ${targetY}`,
-        mx + jog * 0.5, my,
-      ];
-    }
-  }
-
-  // Opposite horizontal handles (left→right / right→left) with nearly the same y:
-  // same collapse risk in the vertical axis.
-  if (
-    (sourcePosition === Position.Left  && targetPosition === Position.Right) ||
-    (sourcePosition === Position.Right && targetPosition === Position.Left)
-  ) {
-    if (dy < MIN_ARC) {
-      const jog  = MIN_ARC * 0.6;
-      const xDir = sourcePosition === Position.Left ? 1 : -1;
-      return [
-        `M ${sourceX} ${sourceY} C ${sourceX + xDir * dx * 0.25} ${sourceY + jog} ${targetX - xDir * dx * 0.25} ${targetY + jog} ${targetX} ${targetY}`,
-        mx, my + jog * 0.5,
-      ];
-    }
-  }
-
+  // All other combinations (bottom→top, left→right, cross-direction, etc.):
+  // getBezierPath produces the correct result. A straight line for axis-aligned
+  // nodes is intentional — it represents natural flow direction.
   const [path, lx, ly] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
   return [path, lx, ly] as [string, number, number];
 };
