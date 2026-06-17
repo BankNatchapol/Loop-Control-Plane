@@ -2,7 +2,7 @@
   "id": "workflow-feature-development-loop",
   "projectId": "project-loopboard",
   "name": "Feature Development Loop",
-  "description": "PRD-aligned feature workflow from human intake through Spec Kit artifacts, task import, AI implementation, review, pull request, and merge.",
+  "description": "End-to-end feature workflow: human writes a brief, Spec Kit generates and clarifies artifacts, AO implements per task with CI loops and PR review, then the feature branch is tested, reviewed, and merged.",
   "version": 1,
   "nodes": [
     {
@@ -10,6 +10,7 @@
       "workflowId": "workflow-feature-development-loop",
       "type": "human-input",
       "name": "Human Input",
+      "guidance": "Write the feature brief or PRD. Describe what you want built — scope, goals, any constraints. This becomes the source of truth for Spec Kit.",
       "mode": "human",
       "position": { "x": 0, "y": 120 },
       "inputArtifacts": [],
@@ -27,23 +28,25 @@
       "workflowId": "workflow-feature-development-loop",
       "type": "spec-kit-actions",
       "name": "Spec Kit Actions",
+      "guidance": "Spec Kit reads the PRD and generates spec.md, plan.md, tasks.md, an artifact consistency analysis, and a quality checklist. Review the outputs before the Clarify step.",
       "mode": "semi",
       "position": { "x": 260, "y": 120 },
       "inputArtifacts": [
         { "name": "feature-brief", "path": "specs/{feature}/PRD.md", "required": true }
       ],
       "outputArtifacts": [
-        { "name": "spec", "path": "specs/{feature}/spec.md", "required": true },
-        { "name": "plan", "path": "specs/{feature}/plan.md", "required": true },
-        { "name": "tasks", "path": "specs/{feature}/tasks.md", "required": true }
+        { "name": "spec",      "path": "specs/{feature}/spec.md",      "required": true },
+        { "name": "plan",      "path": "specs/{feature}/plan.md",      "required": true },
+        { "name": "tasks",     "path": "specs/{feature}/tasks.md",     "required": true },
+        { "name": "checklist", "path": "specs/{feature}/checklist.md", "required": false }
       ],
       "requireApproval": true,
       "maxRetries": 1,
       "riskPolicy": "medium",
       "config": {
         "executor": {
-          "backend": "codex",
-          "args": ["spec", "plan", "tasks"],
+          "backend": "spec-kit",
+          "args": ["spec", "plan", "tasks", "analyze", "checklist"],
           "timeoutMs": 300000
         }
       },
@@ -54,7 +57,7 @@
       "workflowId": "workflow-feature-development-loop",
       "type": "spec-kit-clarify",
       "name": "Spec Kit Clarify",
-      "guidance": "Run `speckit.clarify` in your terminal to let the AI surface underspecified areas and ask clarifying questions. Answer them, then approve here to proceed to plan and task generation.",
+      "guidance": "Run `speckit.clarify` in your terminal. The AI will surface underspecified areas and ask questions. Answer them to tighten the spec. If the spec changes substantially, loop back to regenerate plan and tasks. Approve here when the spec is solid.",
       "mode": "human",
       "position": { "x": 520, "y": 120 },
       "inputArtifacts": [
@@ -74,12 +77,14 @@
       "workflowId": "workflow-feature-development-loop",
       "type": "human-review",
       "name": "Human Review",
+      "guidance": "Final human sign-off before implementation begins. Review spec.md, plan.md, tasks.md, and the checklist. Approve only when you are confident the scope is correct — this gates AO spawning agents.",
       "mode": "human",
       "position": { "x": 780, "y": 120 },
       "inputArtifacts": [
-        { "name": "spec", "path": "specs/{feature}/spec.md", "required": true },
-        { "name": "plan", "path": "specs/{feature}/plan.md", "required": true },
-        { "name": "tasks", "path": "specs/{feature}/tasks.md", "required": true }
+        { "name": "spec",      "path": "specs/{feature}/spec.md",      "required": true },
+        { "name": "plan",      "path": "specs/{feature}/plan.md",      "required": true },
+        { "name": "tasks",     "path": "specs/{feature}/tasks.md",     "required": true },
+        { "name": "checklist", "path": "specs/{feature}/checklist.md", "required": false }
       ],
       "outputArtifacts": [
         {
@@ -148,10 +153,10 @@
       "id": "node-agent-orchestrator-implement",
       "workflowId": "workflow-feature-development-loop",
       "type": "agent-orchestrator-implement",
-      "name": "Agent Orchestrator Implement",
-      "guidance": "AO spawns one agent per GitHub issue. Each agent works in its own worktree and branch, implements the feature, self-fixes CI failures, opens a PR, then loops on review comments until the PR is approved. To automate the review step, install PR Agent as a GitHub Action on the repo — it posts review comments automatically when AO opens a PR, which AO then addresses. The workflow pauses only when human judgment is required.",
-      "mode": "semi",
-      "position": { "x": 1820, "y": 120 },
+      "name": "AO Implement",
+      "guidance": "AO spawns one agent per GitHub issue. Each agent works in its own worktree: implements, self-fixes CI, opens a per-task PR, then loops on review comments until approved. Install PR Agent as a GitHub Action so it reviews PRs automatically — AO picks up its comments and addresses them. The workflow waits here until all per-task PRs are merged into the feature branch.",
+      "mode": "auto",
+      "position": { "x": 1560, "y": 120 },
       "inputArtifacts": [
         {
           "name": "github-issues",
@@ -166,12 +171,13 @@
           "required": true
         }
       ],
-      "requireApproval": true,
+      "requireApproval": false,
       "maxRetries": 2,
       "riskPolicy": "medium",
       "config": {
         "executor": {
-          "backend": "agent-orchestrator"
+          "backend": "agent-orchestrator",
+          "timeoutMs": 1800000
         }
       },
       "currentState": "idle"
@@ -181,8 +187,9 @@
       "workflowId": "workflow-feature-development-loop",
       "type": "run-tests",
       "name": "Run Tests",
-      "mode": "semi",
-      "position": { "x": 2080, "y": 120 },
+      "guidance": "Runs the project test suite against the feature branch after all per-task PRs are merged. Provides independent verification beyond AO's internal CI loop.",
+      "mode": "auto",
+      "position": { "x": 1820, "y": 120 },
       "inputArtifacts": [
         {
           "name": "implementation-branch",
@@ -197,10 +204,15 @@
           "required": true
         }
       ],
-      "requireApproval": true,
+      "requireApproval": false,
       "maxRetries": 2,
-      "riskPolicy": "medium",
-      "config": {},
+      "riskPolicy": "low",
+      "config": {
+        "executor": {
+          "command": "npm test",
+          "timeoutMs": 600000
+        }
+      },
       "currentState": "idle"
     },
     {
@@ -208,8 +220,9 @@
       "workflowId": "workflow-feature-development-loop",
       "type": "ai-review",
       "name": "AI Review",
-      "mode": "semi",
-      "position": { "x": 2340, "y": 120 },
+      "guidance": "AI reads the diff and the test report, then either approves (→ Open PR) or flags changes needed (→ Manual Claude Code Edit). Change the Agent field in the sidebar to pick the review backend.",
+      "mode": "auto",
+      "position": { "x": 2080, "y": 120 },
       "inputArtifacts": [
         {
           "name": "implementation-branch",
@@ -229,9 +242,9 @@
           "required": true
         }
       ],
-      "requireApproval": true,
+      "requireApproval": false,
       "maxRetries": 0,
-      "riskPolicy": "medium",
+      "riskPolicy": "low",
       "config": {},
       "currentState": "idle"
     },
@@ -240,8 +253,9 @@
       "workflowId": "workflow-feature-development-loop",
       "type": "manual-claude-code-edit",
       "name": "Manual Claude Code Edit",
+      "guidance": "AI Review flagged issues that need human attention. Open the review-notes artifact and apply fixes in Claude Code. Approve when the branch is ready to re-test.",
       "mode": "human",
-      "position": { "x": 2340, "y": 320 },
+      "position": { "x": 2080, "y": 320 },
       "inputArtifacts": [
         {
           "name": "review-notes",
@@ -267,8 +281,9 @@
       "workflowId": "workflow-feature-development-loop",
       "type": "open-pr",
       "name": "Open PR",
+      "guidance": "Opens the final pull request for the feature branch into main. This is the merge-to-main PR — separate from AO's per-task PRs that targeted the feature branch.",
       "mode": "semi",
-      "position": { "x": 2600, "y": 120 },
+      "position": { "x": 2340, "y": 120 },
       "inputArtifacts": [
         {
           "name": "implementation-branch",
@@ -294,8 +309,9 @@
       "workflowId": "workflow-feature-development-loop",
       "type": "merge",
       "name": "Merge",
+      "guidance": "Final human gate. Review the PR, confirm CI is green, then approve here to merge the feature branch into main.",
       "mode": "human",
-      "position": { "x": 2860, "y": 120 },
+      "position": { "x": 2600, "y": 120 },
       "inputArtifacts": [
         {
           "name": "pull-request",
