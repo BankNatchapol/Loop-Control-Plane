@@ -25,6 +25,7 @@ export const ENGINE_DELEGATED_WORKFLOW_NODE_TYPES = [
   "spec-kit-actions",
   "import-tasks",
   "create-github-issues",
+  "agent-orchestrator-implement",
   "open-pr",
   "run-tests",
   "ai-review",

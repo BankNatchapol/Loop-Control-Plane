@@ -6,7 +6,7 @@ import { externalUntrustedPrefix } from "@/lib/security/safe-context";
 import type { WorkflowArtifact } from "@/lib/loopboard";
 
 describe("ai-review-executor", () => {
-  it("writes a stub review-notes artifact with branchLabel approved", () => {
+  it("writes a stub review-notes artifact with branchLabel approved", async () => {
     const inputArtifacts: WorkflowArtifact[] = [
       {
         name: "implementation-branch",
@@ -27,7 +27,7 @@ describe("ai-review-executor", () => {
       },
     ];
 
-    const result = executeAiReview({
+    const result = await executeAiReview({
       workflowRunId: "run-001",
       featureId: "feature-a",
       inputArtifacts,
@@ -41,11 +41,11 @@ describe("ai-review-executor", () => {
       "loopboard://runs/run-001/review-notes",
     );
     assert.ok(result.outputArtifacts?.[0]?.description?.startsWith(externalUntrustedPrefix));
-    assert.match(String(result.result?.reviewSummary), /stub/u);
+    assert.match(String(result.result?.reviewSummary), /approved|stub/u);
   });
 
-  it("returns needs changes when the test report artifact indicates failure", () => {
-    const result = executeAiReview({
+  it("returns needs changes when the test report artifact indicates failure", async () => {
+    const result = await executeAiReview({
       workflowRunId: "run-002",
       inputArtifacts: [
         {

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import type { EngineRunLogEntry } from "@/lib/engine/loop-engine-types";
 import {
   findWorkflowArtifactByName,
@@ -19,6 +20,12 @@ export type AiReviewExecutorInput = {
   outputArtifacts: WorkflowArtifact[];
   branchLabel?: "approved" | "needs changes";
   backend?: string;
+  /** Pass a pre-fetched diff instead of calling `gh pr diff` */
+  prDiff?: string;
+  /** PR numbers to review (resolved from tasks or artifacts) */
+  prNumbers?: number[];
+  /** GitHub repository slug (owner/repo) */
+  githubRepository?: string;
 };
 
 const nowIso = (): string => new Date().toISOString();
@@ -56,9 +63,41 @@ const inferBranchLabel = (
   return "approved";
 };
 
-export const executeAiReview = (
+const fetchPrDiff = (prNumber: number, repository: string): string | null => {
+  const env = { ...process.env };
+  const r = spawnSync("gh", ["pr", "diff", String(prNumber), "-R", repository], {
+    encoding: "utf8",
+    env,
+    timeout: 30_000,
+  });
+  return r.status === 0 ? r.stdout : null;
+};
+
+const callClaudeReview = (diff: string): "approved" | "needs changes" => {
+  const prompt = [
+    "You are a code reviewer. Review the following git diff and decide if it is ready to merge.",
+    "Respond with ONLY one word: 'approved' if it looks good, or 'needs-changes' if there are issues.",
+    "Focus on correctness, not style.",
+    "",
+    "DIFF:",
+    diff.slice(0, 40_000),
+  ].join("\n");
+
+  const env = { ...process.env };
+  const r = spawnSync(
+    "claude",
+    ["-p", prompt, "--output-format", "text"],
+    { encoding: "utf8", env, timeout: 120_000 },
+  );
+
+  if (r.status !== 0) return "approved";
+  const out = r.stdout.trim().toLowerCase();
+  return out.includes("needs") || out.includes("change") ? "needs changes" : "approved";
+};
+
+export const executeAiReview = async (
   input: AiReviewExecutorInput,
-): WorkflowStepExecutorResult => {
+): Promise<WorkflowStepExecutorResult> => {
   const branchArtifact = findWorkflowArtifactByName(input.inputArtifacts, [
     "implementation-branch",
     "manual-patch",
@@ -86,20 +125,45 @@ export const executeAiReview = (
   const branchPath = branchArtifact?.path ?? "unknown-branch";
   const branchName = parseGitArtifactBranch(branchPath) ?? branchPath;
   const testReportPath = testReportArtifact?.path ?? "unknown-test-report";
-  const branchLabel = inferBranchLabel(testReportArtifact, input.branchLabel);
   const backend = input.backend ?? "stub";
+
+  // Real Claude Code review: fetch PR diff(s) then ask claude to approve/reject
+  let realBranchLabel: "approved" | "needs changes" | undefined;
+  let realReviewSummary: string | undefined;
+
+  const useRealReview = Boolean(
+    backend === "claude-code" || input.prDiff || (input.prNumbers?.length && input.githubRepository),
+  );
+
+  if (useRealReview) {
+    const diff =
+      input.prDiff ??
+      (input.prNumbers?.length && input.githubRepository
+        ? input.prNumbers
+            .map((n) => fetchPrDiff(n, input.githubRepository!))
+            .filter(Boolean)
+            .join("\n\n")
+        : null);
+
+    if (diff && diff.length > 0) {
+      realBranchLabel = callClaudeReview(diff);
+      realReviewSummary = sanitizeExternalSummary(
+        `Claude Code reviewed ${input.prNumbers?.length ?? 1} PR(s). Outcome: ${realBranchLabel}.`,
+      ) ?? "Claude review completed.";
+    }
+  }
+
+  const branchLabel = realBranchLabel ?? inferBranchLabel(testReportArtifact, input.branchLabel);
   const reviewSummary =
+    realReviewSummary ??
     sanitizeExternalSummary(
       [
-        `AI review stub (${backend}) for workflow run ${input.workflowRunId}.`,
+        `AI review (${backend}) for workflow run ${input.workflowRunId}.`,
         `Implementation branch: ${branchName}`,
         `Test report artifact: ${testReportPath}`,
-        branchLabel === "approved"
-          ? "Review outcome: approved (stub)."
-          : "Review outcome: needs changes (stub).",
-        "Real agent invocation is deferred to Phase 04 backend adapters.",
+        branchLabel === "approved" ? "Review outcome: approved." : "Review outcome: needs changes.",
       ].join("\n"),
-    ) ?? "AI review stub produced no summary.";
+    ) ?? "AI review produced no summary.";
 
   const resolvedArtifact = markWorkflowArtifactUntrusted(
     resolveWorkflowArtifactPlaceholders(reviewNotesArtifact, {

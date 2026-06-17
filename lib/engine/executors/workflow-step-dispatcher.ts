@@ -11,6 +11,7 @@ import {
 } from "@/lib/engine/process-runner";
 
 import { executeAiReview } from "@/lib/engine/executors/ai-review-executor";
+import { executeAoImplement } from "@/lib/engine/executors/ao-implement-executor";
 import { executeCreateGitHubIssues } from "@/lib/engine/executors/create-github-issues-executor";
 import { executeImportTasks } from "@/lib/engine/executors/import-tasks-executor";
 import { executeOpenPr } from "@/lib/engine/executors/open-pr-executor";
@@ -203,14 +204,47 @@ export const dispatchWorkflowStepJob = async (
     return toExecutorResult(stepResult);
   }
 
-  if (payload.nodeType === "ai-review") {
-    const stepResult = executeAiReview({
+  if (payload.nodeType === "agent-orchestrator-implement") {
+    const featureId = typeof payload.featureId === "string" ? payload.featureId : undefined;
+    if (!featureId) {
+      return {
+        success: false,
+        error: "AO Implement requires a featureId on the workflow run.",
+        logs: [],
+      };
+    }
+    const stepResult = await executeAoImplement({
       workflowRunId: payload.workflowRunId,
-      featureId:
-        typeof payload.featureId === "string" ? payload.featureId : undefined,
+      featureId,
+      repository: deps.repository,
+      outputArtifacts: payload.outputArtifacts,
+      timeoutMs: executorConfig.timeoutMs,
+    });
+    return toExecutorResult(stepResult);
+  }
+
+  if (payload.nodeType === "ai-review") {
+    const featureId = typeof payload.featureId === "string" ? payload.featureId : undefined;
+    // Gather PR numbers from the feature's tasks for real Claude Code review
+    let prNumbers: number[] | undefined;
+    let githubRepository: string | undefined;
+    if (featureId) {
+      const feature = deps.repository.getFeature(featureId);
+      const project = deps.repository.getProject(feature.projectId);
+      githubRepository = project.githubRepository;
+      const tasks = deps.repository
+        .listBoardData(project.id)
+        .tasks.filter((t) => t.featureId === featureId && t.github.pullRequestNumber);
+      prNumbers = tasks.map((t) => t.github.pullRequestNumber!).filter(Boolean);
+    }
+    const stepResult = await executeAiReview({
+      workflowRunId: payload.workflowRunId,
+      featureId,
       inputArtifacts: payload.inputArtifacts,
       outputArtifacts: payload.outputArtifacts,
-      backend: executorConfig.backend,
+      backend: executorConfig.backend ?? "claude-code",
+      prNumbers,
+      githubRepository,
     });
 
     return toExecutorResult(stepResult);
