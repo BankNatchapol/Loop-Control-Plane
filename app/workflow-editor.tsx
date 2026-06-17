@@ -174,36 +174,9 @@ const AO_STEPS = [
 const NODE_STEPS: Partial<Record<string, string[]>> = {
   "agent-orchestrator-implement": AO_STEPS,
   "spec-kit-actions": [
-    "Read feature brief (PRD.md)",
-    "Generate spec document",
-    "Generate implementation plan",
-    "Break plan into task list",
-    "Write output files to disk",
-  ],
-  "import-tasks": [
-    "Parse tasks.md from Spec Kit",
-    "Create Loopboard tasks per entry",
-    "Link tasks to feature",
-  ],
-  "create-github-issues": [
-    "Read Loopboard task list",
-    "Create one GitHub issue per task",
-    "Link issue numbers back to tasks",
-  ],
-  "ai-review": [
-    "Read implementation branch diff",
-    "Review code against spec & plan",
-    "Write review notes output",
-  ],
-  "run-tests": [
-    "Run project test suite",
-    "Capture output & exit code",
-    "Produce test report artifact",
-  ],
-  "open-pr": [
-    "Compare implementation branch to base",
-    "Open pull request on GitHub",
-    "Link PR to workflow run",
+    "Generate Spec",
+    "Generate Plan",
+    "Generate Tasks",
   ],
 };
 
@@ -309,14 +282,20 @@ const SketchNode = ({ data, selected }: NodeProps<Node<WorkflowCanvasNodeData>>)
         {data.label}
       </div>
       {data.steps && (
-        <ul style={{ margin: "7px 0 0", padding: 0, listStyle: "none", textAlign: "left", borderTop: `1px dashed ${m.border}`, paddingTop: 6 }}>
+        <div style={{ margin: "7px -4px 0", borderTop: `1px dashed ${m.border}`, paddingTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
           {data.steps.map((step, i) => (
-            <li key={i} style={{ fontSize: 10, color: m.labelColor, lineHeight: 1.55, display: "flex", alignItems: "flex-start", gap: 4 }}>
-              <span style={{ opacity: 0.55, minWidth: 12, fontVariantNumeric: "tabular-nums" }}>{i + 1}.</span>
-              <span>{step}</span>
-            </li>
+            <div key={i} style={{
+              fontSize: 10, fontWeight: 500, color: m.labelColor,
+              background: "rgba(255,255,255,0.55)",
+              border: `1.5px solid ${m.border}`,
+              borderRadius: "8px 6px 9px 7px / 7px 9px 6px 8px",
+              padding: "3px 8px",
+              textAlign: "left",
+            }}>
+              {step}
+            </div>
           ))}
-        </ul>
+        </div>
       )}
       {data.active && (
         <div style={{
