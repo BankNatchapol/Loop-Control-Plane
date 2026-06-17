@@ -426,6 +426,7 @@ export function WorkflowEditor({
   const historyRef = useRef<Workflow[]>([]);
   const futureRef = useRef<Workflow[]>([]);
   const draftWorkflowRef = useRef<Workflow | null>(null);
+  const reconnectingEdgeRef = useRef<Edge | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
 
@@ -867,14 +868,17 @@ export function WorkflowEditor({
     const target = (connection as Connection).target ?? (connection as Edge).target;
     if (!source || !target) return false;
     if (source === target) return false;
-    // Use ref (always current) rather than draftWorkflow state which may be stale
-    // during rapid interactions before React re-renders.
     const wf = draftWorkflowRef.current;
     if (!wf) return true;
     if (wf.edges.some(e => e.sourceNodeId === source && e.targetNodeId === target)) return false;
     const sourceNode = wf.nodes.find(n => n.id === source);
     const maxOutputs = sourceNode?.mode === "human" ? 2 : 1;
-    const outgoing = wf.edges.filter(e => e.sourceNodeId === source).length;
+    // When reconnecting, the dragged edge is being moved (not added), so don't
+    // count it against the source node's output limit.
+    const reconnecting = reconnectingEdgeRef.current;
+    const reconnectingFromSameSource = reconnecting?.source === source;
+    const outgoing = wf.edges.filter(e => e.sourceNodeId === source).length
+      - (reconnectingFromSameSource ? 1 : 0);
     if (outgoing >= maxOutputs) return false;
     return true;
   }, []);
@@ -921,9 +925,17 @@ export function WorkflowEditor({
     });
   }, [pushToHistory]);
 
+  const onReconnectStart = useCallback((_event: React.MouseEvent | React.TouchEvent, edge: Edge) => {
+    reconnectingEdgeRef.current = edge;
+  }, []);
+
+  const onReconnectEnd = useCallback(() => {
+    reconnectingEdgeRef.current = null;
+  }, []);
+
   const onReconnect = useCallback((oldEdge: Edge, newConnection: Connection) => {
+    reconnectingEdgeRef.current = null;
     if (!newConnection.source || !newConnection.target) return;
-    // Validate: no self-loop, no duplicate (excluding the edge being reconnected)
     if (newConnection.source === newConnection.target) return;
     const existingEdges = draftWorkflowRef.current?.edges ?? [];
     const isDuplicate = existingEdges.some(
@@ -939,8 +951,7 @@ export function WorkflowEditor({
       return {
         ...currentWorkflow,
         edges: currentWorkflow.edges.map((edge) =>
-          // Keep edge.id unchanged — canvas uses oldEdge.id so they must stay in sync.
-          // Changing the ID here would cause onEdgesChange to fail to find the edge on delete.
+          // Keep edge.id unchanged so canvas/workflow IDs stay in sync on delete.
           edge.id !== oldEdge.id ? edge : {
             ...edge,
             sourceNodeId: newConnection.source!,
@@ -1548,6 +1559,8 @@ export function WorkflowEditor({
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
               onReconnect={onReconnect}
+              onReconnectStart={onReconnectStart}
+              onReconnectEnd={onReconnectEnd}
               isValidConnection={isValidConnection}
               onNodeClick={(_event, node) => setSelectedNodeId(node.id)}
               nodeTypes={nodeTypes}
