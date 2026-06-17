@@ -258,7 +258,16 @@ const SketchEdge = ({
     return drawable.sets.map(set => opsToD(set.ops));
   }, [edgePath, stroke, id]);
 
-  const arrowAngle = Math.atan2(targetY - sourceY, targetX - sourceX) * (180 / Math.PI);
+  // Derive angle from targetPosition (which direction the bezier curve arrives from)
+  // rather than the straight-line source→target angle, which is wrong for curved paths.
+  const ENTRY_ANGLE: Record<string, number> = {
+    [Position.Left]: 0,     // edge travels rightward into the left side of the node
+    [Position.Right]: 180,  // edge travels leftward into the right side
+    [Position.Top]: 90,     // edge travels downward into the top
+    [Position.Bottom]: -90, // edge travels upward into the bottom
+  };
+  const arrowAngle = ENTRY_ANGLE[targetPosition] ??
+    Math.atan2(targetY - sourceY, targetX - sourceX) * (180 / Math.PI);
 
   return (
     <>
@@ -847,6 +856,36 @@ export function WorkflowEditor({
       };
     });
   }, [pushToHistory]);
+
+  // Checks reachability: can we get from `fromId` to `toId` in the current graph?
+  const canReach = useCallback((fromId: string, toId: string): boolean => {
+    if (!draftWorkflow) return false;
+    const visited = new Set<string>();
+    const queue = [fromId];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (current === toId) return true;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      for (const edge of draftWorkflow.edges) {
+        if (edge.sourceNodeId === current) queue.push(edge.targetNodeId);
+      }
+    }
+    return false;
+  }, [draftWorkflow]);
+
+  const isValidConnection = useCallback((connection: Edge | Connection): boolean => {
+    const source = "source" in connection ? connection.source : null;
+    const target = "target" in connection ? connection.target : null;
+    if (!source || !target) return false;
+    // No self-loops
+    if (source === target) return false;
+    // No duplicate edges
+    if (draftWorkflow?.edges.some(e => e.sourceNodeId === source && e.targetNodeId === target)) return false;
+    // No cycles: adding source→target would create a cycle if target can already reach source
+    if (canReach(target, source)) return false;
+    return true;
+  }, [draftWorkflow, canReach]);
 
   const onConnect = useCallback((connection: Connection) => {
     if (draftWorkflowRef.current) pushToHistory(draftWorkflowRef.current);
@@ -1514,6 +1553,7 @@ export function WorkflowEditor({
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
               onReconnect={onReconnect}
+              isValidConnection={isValidConnection}
               onNodeClick={(_event, node) => setSelectedNodeId(node.id)}
               nodeTypes={nodeTypes}
               edgeTypes={edgeTypes}
