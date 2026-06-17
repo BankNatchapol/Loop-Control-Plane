@@ -857,35 +857,16 @@ export function WorkflowEditor({
     });
   }, [pushToHistory]);
 
-  // Checks reachability: can we get from `fromId` to `toId` in the current graph?
-  const canReach = useCallback((fromId: string, toId: string): boolean => {
-    if (!draftWorkflow) return false;
-    const visited = new Set<string>();
-    const queue = [fromId];
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      if (current === toId) return true;
-      if (visited.has(current)) continue;
-      visited.add(current);
-      for (const edge of draftWorkflow.edges) {
-        if (edge.sourceNodeId === current) queue.push(edge.targetNodeId);
-      }
-    }
-    return false;
-  }, [draftWorkflow]);
-
   const isValidConnection = useCallback((connection: Edge | Connection): boolean => {
-    const source = "source" in connection ? connection.source : null;
-    const target = "target" in connection ? connection.target : null;
+    const source = (connection as Connection).source ?? (connection as Edge).source;
+    const target = (connection as Connection).target ?? (connection as Edge).target;
     if (!source || !target) return false;
     // No self-loops
     if (source === target) return false;
-    // No duplicate edges
+    // No duplicate edges (same source+target already exists)
     if (draftWorkflow?.edges.some(e => e.sourceNodeId === source && e.targetNodeId === target)) return false;
-    // No cycles: adding source→target would create a cycle if target can already reach source
-    if (canReach(target, source)) return false;
     return true;
-  }, [draftWorkflow, canReach]);
+  }, [draftWorkflow]);
 
   const onConnect = useCallback((connection: Connection) => {
     if (draftWorkflowRef.current) pushToHistory(draftWorkflowRef.current);
@@ -931,6 +912,13 @@ export function WorkflowEditor({
 
   const onReconnect = useCallback((oldEdge: Edge, newConnection: Connection) => {
     if (!newConnection.source || !newConnection.target) return;
+    // Validate: no self-loop, no duplicate (excluding the edge being reconnected)
+    if (newConnection.source === newConnection.target) return;
+    const existingEdges = draftWorkflowRef.current?.edges ?? [];
+    const isDuplicate = existingEdges.some(
+      e => e.id !== oldEdge.id && e.sourceNodeId === newConnection.source && e.targetNodeId === newConnection.target,
+    );
+    if (isDuplicate) return;
     if (draftWorkflowRef.current) pushToHistory(draftWorkflowRef.current);
 
     setEdges((currentEdges) => reconnectEdge(oldEdge, newConnection, currentEdges));
