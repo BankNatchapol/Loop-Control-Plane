@@ -1197,7 +1197,7 @@ export function WorkflowEditor({
     if (isDuplicate) return;
     if (draftWorkflowRef.current) pushToHistory(draftWorkflowRef.current);
 
-    setEdges((currentEdges) => reconnectEdge(oldEdge, newConnection, currentEdges));
+    setEdges((currentEdges) => reconnectEdge(oldEdge, newConnection, currentEdges, { shouldReplaceId: false }));
 
     setDraftWorkflow((currentWorkflow) => {
       if (!currentWorkflow) return currentWorkflow;
