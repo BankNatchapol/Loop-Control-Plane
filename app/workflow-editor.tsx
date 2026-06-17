@@ -109,14 +109,59 @@ import {
   workflowNodeExecutorRuntimeHint,
 } from "@/lib/workflows/workflow-executor-editor";
 
-type WorkflowCanvasNodeData = {
-  label: string;
-  mode: WorkflowNodeMode;
-  type: string;
-  active?: boolean;
-};
+type WorkflowCanvasNodeData = { label: string; mode: WorkflowNodeMode; type: string; group?: string; active?: boolean };
 
 const compactText = (value: string) => value.replaceAll("-", " ");
+
+type CatalogEntry = { type: WorkflowEditorNodeType; label: string; defaultName: string };
+type CatalogGroup = { id: string; label: string; functions: CatalogEntry[] };
+
+const CATALOG_GROUPS: CatalogGroup[] = [
+  {
+    id: "human",
+    label: "Human Handoff",
+    functions: [
+      { type: "human-review",            label: "Review & Approve", defaultName: "Human Review" },
+      { type: "human-input",             label: "Write Brief",      defaultName: "Human Input"  },
+      { type: "manual-claude-code-edit", label: "Manual Code Edit", defaultName: "Manual Edit"  },
+    ],
+  },
+  {
+    id: "spec-kit",
+    label: "Spec Kit",
+    functions: [
+      { type: "spec-kit-actions", label: "Spec + Plan + Tasks", defaultName: "Spec Kit" },
+    ],
+  },
+  {
+    id: "agent",
+    label: "Agent",
+    functions: [
+      { type: "agent-orchestrator-implement", label: "Implement", defaultName: "Agent Implement" },
+      { type: "ai-review",                    label: "AI Review",  defaultName: "AI Review"      },
+    ],
+  },
+  {
+    id: "test",
+    label: "Test",
+    functions: [
+      { type: "run-tests", label: "Run Tests", defaultName: "Run Tests" },
+    ],
+  },
+  {
+    id: "github",
+    label: "GitHub",
+    functions: [
+      { type: "create-github-issues", label: "Create Issues", defaultName: "Create Issues" },
+      { type: "import-tasks",         label: "Import Tasks",  defaultName: "Import Tasks"  },
+      { type: "open-pr",              label: "Open PR",        defaultName: "Open PR"       },
+      { type: "merge",                label: "Merge",           defaultName: "Merge"        },
+    ],
+  },
+];
+
+const TYPE_TO_GROUP: Record<string, CatalogGroup> = {};
+CATALOG_GROUPS.forEach(g => g.functions.forEach(f => { TYPE_TO_GROUP[f.type] = g; }));
 
 const nodeToCanvasNode = (
   node: WorkflowNode,
@@ -129,6 +174,7 @@ const nodeToCanvasNode = (
     label: node.name,
     mode: node.mode,
     type: node.type,
+    group: TYPE_TO_GROUP[node.type]?.label,
     active: node.id === activeNodeId,
   },
 });
@@ -212,7 +258,7 @@ const SketchNode = ({ data, selected }: NodeProps<Node<WorkflowCanvasNodeData>>)
       transition: "box-shadow 0.15s, border-color 0.15s",
     }}>
       <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", color: m.labelColor, marginBottom: 3 }}>
-        {compactText(data.type)}
+        {data.group ? compactText(data.group) : compactText(data.type)}
       </div>
       <div style={{ fontSize: 14, fontWeight: 600, color: "#23221f", lineHeight: 1.3 }}>
         {data.label}
@@ -505,6 +551,7 @@ export function WorkflowEditor({
   const reconnectingEdgeRef = useRef<Edge | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+  const [openGroupId, setOpenGroupId] = useState<string | null>(null);
 
   const selectedNode = useMemo(
     () => draftWorkflow?.nodes.find((node) => node.id === selectedNodeId),
@@ -1151,7 +1198,7 @@ export function WorkflowEditor({
     setError("");
   };
 
-  const addCatalogNode = (type: WorkflowEditorNodeType) => {
+  const addCatalogNode = (type: WorkflowEditorNodeType, nameOverride?: string) => {
     if (!draftWorkflow) {
       return;
     }
@@ -1164,6 +1211,7 @@ export function WorkflowEditor({
         workflowId: draftWorkflow.id,
         index: draftWorkflow.nodes.length,
       }),
+      ...(nameOverride ? { name: nameOverride } : {}),
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -1650,28 +1698,70 @@ export function WorkflowEditor({
       <div className="grid min-h-[42rem] lg:grid-cols-[minmax(0,1fr)_24rem]">
         <div className="min-w-0">
           <div
-            style={{ display: "flex", flexWrap: "wrap", gap: 6, borderBottom: "2px dashed #ddd9cd", background: "#f5f4f1", padding: "10px 12px" }}
+            style={{ borderBottom: "2px dashed #ddd9cd", background: "#f5f4f1", padding: "8px 12px" }}
             data-testid="workflow-node-catalog"
           >
-            {workflowNodeCatalog.map((node) => (
-              <button
-                key={node.type}
-                type="button"
-                onClick={() => addCatalogNode(node.type)}
-                data-testid={`workflow-add-node-${node.type}`}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 5,
-                  border: "2px solid #23221f", borderRadius: 999,
-                  background: "#fcfbf8", color: "#23221f",
-                  padding: "4px 12px", fontSize: 12, fontWeight: 600,
-                  fontFamily: "var(--font-hand)", cursor: "pointer",
-                  textTransform: "uppercase", letterSpacing: "0.04em",
-                }}
-              >
-                <Plus style={{ width: 12, height: 12 }} />
-                {node.name}
-              </button>
-            ))}
+            {/* Group buttons */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {CATALOG_GROUPS.map((group) => (
+                <button
+                  key={group.id}
+                  type="button"
+                  onClick={() => {
+                    if (group.functions.length === 1) {
+                      addCatalogNode(group.functions[0].type, group.functions[0].defaultName);
+                      setOpenGroupId(null);
+                    } else {
+                      setOpenGroupId(openGroupId === group.id ? null : group.id);
+                    }
+                  }}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 5,
+                    border: openGroupId === group.id ? "2px solid #6f97c7" : "2px solid #23221f",
+                    borderRadius: 999,
+                    background: openGroupId === group.id ? "#eaf1fb" : "#fcfbf8",
+                    color: openGroupId === group.id ? "#3a5f96" : "#23221f",
+                    padding: "4px 12px", fontSize: 12, fontWeight: 600,
+                    fontFamily: "var(--font-hand)", cursor: "pointer",
+                    textTransform: "uppercase", letterSpacing: "0.04em",
+                  }}
+                >
+                  <Plus style={{ width: 12, height: 12 }} />
+                  {group.label}
+                  {group.functions.length > 1 && (
+                    <span style={{ fontSize: 10, opacity: 0.6, marginLeft: 1 }}>▾</span>
+                  )}
+                </button>
+              ))}
+            </div>
+            {/* Function sub-menu — shown when a multi-function group is open */}
+            {openGroupId && (() => {
+              const group = CATALOG_GROUPS.find(g => g.id === openGroupId);
+              if (!group) return null;
+              return (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6, paddingTop: 6, borderTop: "1px dashed #ddd9cd" }}>
+                  <span style={{ fontSize: 10, color: "#9a9890", fontFamily: "var(--font-hand)", textTransform: "uppercase", letterSpacing: "0.06em", alignSelf: "center", marginRight: 4 }}>
+                    {group.label}:
+                  </span>
+                  {group.functions.map((fn) => (
+                    <button
+                      key={fn.type}
+                      type="button"
+                      onClick={() => { addCatalogNode(fn.type, fn.defaultName); setOpenGroupId(null); }}
+                      style={{
+                        display: "inline-flex", alignItems: "center", gap: 4,
+                        border: "1.5px solid #b0ac9f", borderRadius: 999,
+                        background: "#fcfbf8", color: "#23221f",
+                        padding: "3px 10px", fontSize: 11, fontWeight: 500,
+                        fontFamily: "var(--font-hand)", cursor: "pointer",
+                      }}
+                    >
+                      {fn.label}
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
           </div>
           <div className="h-[34rem]" data-testid="workflow-canvas">
             <EdgeActionsContext.Provider value={{ onToggleDashed: toggleEdgeDashed, getOutputCount }}>
@@ -2079,6 +2169,66 @@ export function WorkflowEditor({
                     value={selectedNode.name}
                     onChange={(event) => updateSelectedNode({ name: event.target.value })}
                     className="min-h-9 border border-slate-300 bg-white px-2 text-sm font-normal normal-case text-slate-950"
+                  />
+                </label>
+                {/* Function selector — only shown for nodes that have multiple function options in their group */}
+                {(() => {
+                  const group = TYPE_TO_GROUP[selectedNode.type];
+                  if (!group || group.functions.length <= 1) return null;
+                  return (
+                    <label style={{ display: "grid", gap: 4, fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "#6f6d67", fontFamily: "var(--font-hand)" }}>
+                      Function
+                      <select
+                        value={selectedNode.type}
+                        onChange={(e) => {
+                          const newType = e.target.value as WorkflowEditorNodeType;
+                          const template = workflowNodeCatalog.find(n => n.type === newType);
+                          if (!template || !draftWorkflow) return;
+                          pushToHistory(draftWorkflow);
+                          const now = new Date().toISOString();
+                          const updatedWorkflow = {
+                            ...draftWorkflow,
+                            nodes: draftWorkflow.nodes.map(n =>
+                              n.id !== selectedNode.id ? n : {
+                                ...n,
+                                type: newType,
+                                mode: template.mode,
+                                riskPolicy: template.riskPolicy,
+                                config: template.config,
+                                updatedAt: now,
+                              }
+                            ),
+                          };
+                          setDraftWorkflow(updatedWorkflow);
+                          syncCanvas(updatedWorkflow);
+                        }}
+                        className="border border-slate-300 bg-white px-2 py-1 text-sm font-normal normal-case text-slate-950"
+                      >
+                        {group.functions.map(fn => (
+                          <option key={fn.type} value={fn.type}>{fn.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  );
+                })()}
+                {/* Guidance — instructions for what should happen at this step */}
+                <label style={{ display: "grid", gap: 4, fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "#6f6d67", fontFamily: "var(--font-hand)" }}>
+                  Guidance
+                  <textarea
+                    value={selectedNode.guidance ?? ""}
+                    rows={3}
+                    placeholder="Describe what should happen at this step…"
+                    onChange={(e) => {
+                      if (!draftWorkflow) return;
+                      const now = new Date().toISOString();
+                      setDraftWorkflow({
+                        ...draftWorkflow,
+                        nodes: draftWorkflow.nodes.map(n =>
+                          n.id !== selectedNode.id ? n : { ...n, guidance: e.target.value, updatedAt: now }
+                        ),
+                      });
+                    }}
+                    className="resize-y border border-slate-300 bg-white px-2 py-2 text-sm font-normal normal-case leading-5 text-slate-950"
                   />
                 </label>
                 <div className="grid gap-2 border border-slate-200 bg-white p-2">

@@ -223,6 +223,7 @@ export interface WorkflowNode {
   workflowId: string;
   type: string;
   name: string;
+  guidance?: string;
   mode: WorkflowNodeMode;
   position: {
     x: number;
