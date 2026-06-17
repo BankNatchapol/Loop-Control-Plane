@@ -164,11 +164,11 @@ const TYPE_TO_GROUP: Record<string, CatalogGroup> = {};
 CATALOG_GROUPS.forEach(g => g.functions.forEach(f => { TYPE_TO_GROUP[f.type] = g; }));
 
 const AO_STEPS = [
-  "Spawn agent per GitHub issue",
-  "Own worktree + branch per agent",
-  "Implement & self-fix CI failures",
-  "Open PR + address review comments",
-  "Pause when human judgment needed",
+  "Spawn Agent",
+  "Implement",
+  "Fix CI",
+  "Open PR",
+  "Address Reviews",
 ];
 
 const NODE_STEPS: Partial<Record<string, string[]>> = {
