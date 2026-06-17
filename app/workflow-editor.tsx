@@ -258,41 +258,26 @@ const opsToD = (ops: Array<{ op: string; data: number[] }>): string =>
 // zero — this happens when source and target are at the same height (dy≈0) for
 // horizontal handles, or at the same position for same-direction handles.
 // This wrapper forces a minimum arc so the sketch aesthetic always shows a curve.
-const MIN_ARC = 44;
+const MIN_ARC = 50;
 const getSketchEdgePath = (
   sourceX: number, sourceY: number, sourcePosition: Position,
   targetX: number, targetY: number, targetPosition: Position,
 ): [string, number, number] => {
-  const dx = targetX - sourceX;
-  const dy = targetY - sourceY;
   const mx = (sourceX + targetX) / 2;
   const my = (sourceY + targetY) / 2;
 
-  // Horizontal handles (right→left or left→right) at nearly the same height
-  if (
-    ((sourcePosition === Position.Right && targetPosition === Position.Left) ||
-     (sourcePosition === Position.Left  && targetPosition === Position.Right)) &&
-    Math.abs(dy) < MIN_ARC
-  ) {
-    const bump = (MIN_ARC - Math.abs(dy) * 0.5) * (dx >= 0 ? -1 : 1);
-    const c1x = sourceX + dx * 0.35;
-    const c2x = targetX - dx * 0.35;
-    return [
-      `M ${sourceX} ${sourceY} C ${c1x} ${sourceY + bump} ${c2x} ${targetY + bump} ${targetX} ${targetY}`,
-      mx, my + bump * 0.5,
-    ];
-  }
-
-  // Same-direction handles (bottom→bottom, top→top) — always need explicit arc
+  // Same-direction handles (bottom→bottom, top→top): getBezierPath collapses to
+  // a straight line because control-point offsets are computed relative to the
+  // midpoint, which equals the source/target Y when dy=0. Force a U/arch shape.
   if (sourcePosition === Position.Bottom && targetPosition === Position.Bottom) {
-    const bump = Math.max(MIN_ARC, Math.abs(dy) * 0.4);
+    const bump = Math.max(MIN_ARC, Math.abs(targetY - sourceY) * 0.4);
     return [
       `M ${sourceX} ${sourceY} C ${sourceX} ${sourceY + bump} ${targetX} ${targetY + bump} ${targetX} ${targetY}`,
       mx, my + bump,
     ];
   }
   if (sourcePosition === Position.Top && targetPosition === Position.Top) {
-    const bump = Math.max(MIN_ARC, Math.abs(dy) * 0.4);
+    const bump = Math.max(MIN_ARC, Math.abs(targetY - sourceY) * 0.4);
     return [
       `M ${sourceX} ${sourceY} C ${sourceX} ${sourceY - bump} ${targetX} ${targetY - bump} ${targetX} ${targetY}`,
       mx, my - bump,
@@ -1000,10 +985,9 @@ export function WorkflowEditor({
     const wf = draftWorkflowRef.current;
     if (!wf) return true;
     if (wf.edges.some(e => e.sourceNodeId === source && e.targetNodeId === target)) return false;
-    const sourceNode = wf.nodes.find(n => n.id === source);
-    const maxOutputs = sourceNode?.mode === "human" ? 2 : 1;
-    // When reconnecting, the dragged edge is being moved (not added), so don't
-    // count it against the source node's output limit.
+    // Any node can have at most 2 outputs: one solid (main flow) + one dashed
+    // (optional/loop-back). The dashed/solid toggle carries the semantic distinction.
+    const maxOutputs = 2;
     const reconnecting = reconnectingEdgeRef.current;
     const reconnectingFromSameSource = reconnecting?.source === source;
     const outgoing = wf.edges.filter(e => e.sourceNodeId === source).length
