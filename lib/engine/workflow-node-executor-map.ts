@@ -176,6 +176,20 @@ export const workflowNodeExecutorMap: Record<
     approvalGate: true,
     notes: "Approval gate. Merge remains operator-controlled; no automated merge.",
   },
+  "pr-review-agent": {
+    nodeType: "pr-review-agent",
+    executorModule: "lib/engine/executors/pr-review-executor.ts",
+    defaultBackend: "claude-code",
+    defaultExecutor: { timeoutMs: 300_000 },
+    reuseDirectly: [],
+    needsAdapter: [
+      "pr-agent CLI on PATH (`npm install -g @pr-agent/pr-agent` or equivalent)",
+      "pull-request input artifact with GitHub PR URL from upstream AO or open-pr node",
+      "GitHub token for posting review comments",
+    ],
+    approvalGate: false,
+    notes: "Runs PR Agent to review an open PR and post review comments to GitHub. Backend selects which LLM pr-agent uses.",
+  },
   "manual-claude-code-edit": {
     nodeType: "manual-claude-code-edit",
     executorModule: null,

@@ -22,7 +22,8 @@ export type ProcessCommandProfile =
   | "cursor"
   | "claude"
   | "codex"
-  | "ao";
+  | "ao"
+  | "pr-agent";
 
 export type ProcessProfileDefinition = {
   profile: ProcessCommandProfile;
@@ -123,10 +124,12 @@ const PROFILE_COMMANDS: Record<
   claude: { command: "claude", defaultArgs: [], placeholder: false },
   codex: { command: "codex", defaultArgs: [], placeholder: false },
   ao: { command: "ao", defaultArgs: [], placeholder: false },
+  "pr-agent": { command: "pr-agent", defaultArgs: [], placeholder: false },
 };
 
 const ALLOWED_COMMANDS = new Set<string>([
   ...Object.values(PROFILE_COMMANDS).map((entry) => entry.command),
+  "pr-agent",
   ...CURSOR_AGENT_CANDIDATES.map((entry) => entry.command),
   ...SPEC_KIT_CANDIDATES,
   // Absolute-path fallbacks for when PATH is stripped in IDE-launched servers

@@ -28,6 +28,7 @@ export const workflowNodeTypes = [
   "open-pr",
   "merge",
   "manual-claude-code-edit",
+  "pr-review-agent",
 ] as const;
 
 export type WorkflowEditorNodeType = (typeof workflowNodeTypes)[number];
@@ -275,6 +276,21 @@ export const workflowNodeCatalog: Array<{
       { name: "manual-patch", path: "git://{repository}/{branch}", required: true },
     ],
     config: { optional: true },
+  },
+  {
+    type: "pr-review-agent",
+    name: "PR Review",
+    mode: "auto",
+    requireApproval: false,
+    maxRetries: 1,
+    riskPolicy: "medium",
+    inputArtifacts: [
+      { name: "pull-request", path: "https://github.com/{repository}/pulls", required: true },
+    ],
+    outputArtifacts: [
+      { name: "review-comments", path: "loopboard://runs/{run}/review-comments", required: true },
+    ],
+    config: catalogNodeConfig("pr-review-agent"),
   },
 ];
 

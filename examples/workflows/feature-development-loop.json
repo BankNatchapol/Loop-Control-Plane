@@ -157,12 +157,45 @@
       "currentState": "idle"
     },
     {
+      "id": "node-pr-review",
+      "workflowId": "workflow-feature-development-loop",
+      "type": "pr-review-agent",
+      "name": "PR Review",
+      "guidance": "Runs PR Agent against the pull request opened by AO. Review comments are posted directly to the GitHub PR. Change the Agent field to select which LLM backend performs the review.",
+      "mode": "auto",
+      "position": { "x": 1560, "y": 120 },
+      "inputArtifacts": [
+        {
+          "name": "pull-request",
+          "path": "https://github.com/{repository}/pulls",
+          "required": true
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "review-comments",
+          "path": "loopboard://runs/{run}/review-comments",
+          "required": true
+        }
+      ],
+      "requireApproval": false,
+      "maxRetries": 1,
+      "riskPolicy": "medium",
+      "config": {
+        "executor": {
+          "backend": "claude-code",
+          "timeoutMs": 300000
+        }
+      },
+      "currentState": "idle"
+    },
+    {
       "id": "node-run-tests",
       "workflowId": "workflow-feature-development-loop",
       "type": "run-tests",
       "name": "Run Tests",
       "mode": "semi",
-      "position": { "x": 1560, "y": 120 },
+      "position": { "x": 1820, "y": 120 },
       "inputArtifacts": [
         {
           "name": "implementation-branch",
@@ -189,7 +222,7 @@
       "type": "ai-review",
       "name": "AI Review",
       "mode": "semi",
-      "position": { "x": 1820, "y": 120 },
+      "position": { "x": 2080, "y": 120 },
       "inputArtifacts": [
         {
           "name": "implementation-branch",
@@ -221,7 +254,7 @@
       "type": "manual-claude-code-edit",
       "name": "Manual Claude Code Edit",
       "mode": "human",
-      "position": { "x": 1820, "y": 320 },
+      "position": { "x": 2080, "y": 320 },
       "inputArtifacts": [
         {
           "name": "review-notes",
@@ -248,7 +281,7 @@
       "type": "open-pr",
       "name": "Open PR",
       "mode": "semi",
-      "position": { "x": 2080, "y": 120 },
+      "position": { "x": 2340, "y": 120 },
       "inputArtifacts": [
         {
           "name": "implementation-branch",
@@ -275,7 +308,7 @@
       "type": "merge",
       "name": "Merge",
       "mode": "human",
-      "position": { "x": 2340, "y": 120 },
+      "position": { "x": 2600, "y": 120 },
       "inputArtifacts": [
         {
           "name": "pull-request",
@@ -339,9 +372,17 @@
       "condition": {}
     },
     {
-      "id": "edge-node-agent-orchestrator-implement-to-node-run-tests",
+      "id": "edge-node-agent-orchestrator-implement-to-node-pr-review",
       "workflowId": "workflow-feature-development-loop",
       "sourceNodeId": "node-agent-orchestrator-implement",
+      "targetNodeId": "node-pr-review",
+      "label": "next",
+      "condition": {}
+    },
+    {
+      "id": "edge-node-pr-review-to-node-run-tests",
+      "workflowId": "workflow-feature-development-loop",
+      "sourceNodeId": "node-pr-review",
       "targetNodeId": "node-run-tests",
       "label": "next",
       "condition": {}

@@ -138,8 +138,9 @@ const CATALOG_GROUPS: CatalogGroup[] = [
     id: "agent",
     label: "Agent",
     functions: [
-      { type: "agent-orchestrator-implement", label: "Implement", defaultName: "Agent Implement" },
-      { type: "ai-review",                    label: "AI Review",  defaultName: "AI Review"      },
+      { type: "agent-orchestrator-implement", label: "Implement",  defaultName: "Agent Implement" },
+      { type: "ai-review",                    label: "AI Review",  defaultName: "AI Review"       },
+      { type: "pr-review-agent",              label: "PR Review",  defaultName: "PR Review"       },
     ],
   },
   {
@@ -167,9 +168,13 @@ CATALOG_GROUPS.forEach(g => g.functions.forEach(f => { TYPE_TO_GROUP[f.type] = g
 const NODE_SUBNODES: Partial<Record<string, CanvasSubNode[]>> = {
   "agent-orchestrator-implement": [
     { label: "Implement" },
-    { label: "Fix CI",           loops: true },
+    { label: "Fix CI",  loops: true },
     { label: "Open PR" },
-    { label: "Address Reviews",  loops: true },
+  ],
+  "pr-review-agent": [
+    { label: "Fetch PR Diff" },
+    { label: "Review Code" },
+    { label: "Post Comments" },
   ],
   "spec-kit-actions": [
     { label: "Generate Spec" },
@@ -2280,6 +2285,58 @@ export function WorkflowEditor({
                       >
                         {group.functions.map(fn => (
                           <option key={fn.type} value={fn.type}>{fn.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  );
+                })()}
+                {/* Agent backend selector — shown for agent-group nodes with a switchable LLM backend */}
+                {selectedNode && (() => {
+                  const SWITCHABLE_BACKENDS: Partial<Record<string, Array<{ value: string; label: string }>>> = {
+                    "pr-review-agent": [
+                      { value: "claude-code", label: "Claude Code" },
+                      { value: "codex",       label: "Codex"       },
+                      { value: "cursor",      label: "Cursor"      },
+                    ],
+                    "ai-review": [
+                      { value: "claude-code", label: "Claude Code" },
+                      { value: "codex",       label: "Codex"       },
+                      { value: "cursor",      label: "Cursor"      },
+                    ],
+                  };
+                  const options = SWITCHABLE_BACKENDS[selectedNode.type];
+                  if (!options) return null;
+                  const currentBackend =
+                    (selectedNode.config?.executor as { backend?: string } | undefined)?.backend ??
+                    options[0]?.value ?? "";
+                  return (
+                    <label style={{ display: "grid", gap: 4, fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "#6f6d67", fontFamily: "var(--font-hand)" }}>
+                      Agent
+                      <select
+                        value={currentBackend}
+                        onChange={(e) => {
+                          if (!draftWorkflow) return;
+                          const now = new Date().toISOString();
+                          const updatedConfig = {
+                            ...selectedNode.config,
+                            executor: {
+                              ...(selectedNode.config?.executor as object | undefined ?? {}),
+                              backend: e.target.value,
+                            },
+                          };
+                          const updatedWorkflow = {
+                            ...draftWorkflow,
+                            nodes: draftWorkflow.nodes.map(n =>
+                              n.id !== selectedNode.id ? n : { ...n, config: updatedConfig, updatedAt: now }
+                            ),
+                          };
+                          setDraftWorkflow(updatedWorkflow);
+                          syncCanvas(updatedWorkflow);
+                        }}
+                        className="border border-slate-300 bg-white px-2 py-1 text-sm font-normal normal-case text-slate-950"
+                      >
+                        {options.map(opt => (
+                          <option key={opt.value} value={opt.value}>{opt.label}</option>
                         ))}
                       </select>
                     </label>
