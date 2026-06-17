@@ -162,7 +162,7 @@ const edgeToCanvasEdge = (edge: WorkflowEdge, posMap?: NodePositionMap): Edge =>
     source: edge.sourceNodeId,
     target: edge.targetNodeId,
     label: edge.label || undefined,
-    animated: edge.label === "retry",
+    animated: edge.dashed === true,
     sourceHandle,
     targetHandle,
   };
@@ -234,8 +234,8 @@ const SketchNode = ({ data, selected }: NodeProps<Node<WorkflowCanvasNodeData>>)
   );
 };
 
-const EdgeActionsContext = createContext<{ onToggleRetry: (id: string) => void }>({
-  onToggleRetry: () => {},
+const EdgeActionsContext = createContext<{ onToggleDashed: (id: string) => void }>({
+  onToggleDashed: () => {},
 });
 
 const roughGen = rough.generator();
@@ -254,7 +254,7 @@ const SketchEdge = ({
   id, sourceX, sourceY, targetX, targetY,
   sourcePosition, targetPosition, selected, animated,
 }: EdgeProps) => {
-  const { onToggleRetry } = useContext(EdgeActionsContext);
+  const { onToggleDashed } = useContext(EdgeActionsContext);
   const [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
   const stroke = selected ? "#6f97c7" : "#23221f";
 
@@ -299,8 +299,8 @@ const SketchEdge = ({
       <EdgeLabelRenderer>
         <button
           className="nodrag nopan"
-          title={animated ? "Switch to solid line" : "Switch to dashed line"}
-          onClick={(e) => { e.stopPropagation(); onToggleRetry(id); }}
+          title={animated ? "Switch to solid (main flow)" : "Switch to dashed (optional path)"}
+          onClick={(e) => { e.stopPropagation(); onToggleDashed(id); }}
           style={{
             position: "absolute",
             transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
@@ -767,7 +767,7 @@ export function WorkflowEditor({
     setCanRedo(false);
   }, []);
 
-  const toggleEdgeRetry = useCallback((edgeId: string) => {
+  const toggleEdgeDashed = useCallback((edgeId: string) => {
     if (draftWorkflowRef.current) pushToHistory(draftWorkflowRef.current);
     setEdges((currentEdges) =>
       currentEdges.map((e) => e.id !== edgeId ? e : { ...e, animated: !e.animated })
@@ -779,7 +779,7 @@ export function WorkflowEditor({
         edges: currentWorkflow.edges.map((e) =>
           e.id !== edgeId ? e : {
             ...e,
-            label: e.label === "retry" ? "" : "retry",
+            dashed: !e.dashed,
             updatedAt: new Date().toISOString(),
           }
         ),
@@ -1607,7 +1607,7 @@ export function WorkflowEditor({
             ))}
           </div>
           <div className="h-[34rem]" data-testid="workflow-canvas">
-            <EdgeActionsContext.Provider value={{ onToggleRetry: toggleEdgeRetry }}>
+            <EdgeActionsContext.Provider value={{ onToggleDashed: toggleEdgeDashed }}>
             <ReactFlow
               nodes={nodes}
               edges={edges}

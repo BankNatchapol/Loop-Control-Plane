@@ -452,16 +452,19 @@ export const normalizeWorkflowEdge = ({
   sourceNodeId,
   targetNodeId,
   label = "next",
+  dashed,
 }: {
   workflowId: string;
   sourceNodeId: string;
   targetNodeId: string;
   label?: string;
+  dashed?: boolean;
 }): Omit<WorkflowEdge, "createdAt" | "updatedAt"> => ({
   id: workflowEdgeId(sourceNodeId, targetNodeId),
   workflowId,
   sourceNodeId,
   targetNodeId,
   label,
+  ...(dashed ? { dashed: true } : {}),
   condition: {},
 });

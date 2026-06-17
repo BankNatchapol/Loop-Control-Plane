@@ -245,6 +245,8 @@ export interface WorkflowEdge {
   sourceNodeId: string;
   targetNodeId: string;
   label: string;
+  /** When true, renders as a dashed line — used for optional/conditional paths. */
+  dashed?: boolean;
   condition: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;

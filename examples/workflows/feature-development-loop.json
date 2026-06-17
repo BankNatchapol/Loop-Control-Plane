@@ -40,7 +40,13 @@
       "requireApproval": true,
       "maxRetries": 1,
       "riskPolicy": "medium",
-      "config": {},
+      "config": {
+        "executor": {
+          "backend": "codex",
+          "args": ["spec", "plan", "tasks"],
+          "timeoutMs": 300000
+        }
+      },
       "currentState": "idle"
     },
     {
@@ -123,7 +129,7 @@
       "workflowId": "workflow-feature-development-loop",
       "type": "agent-orchestrator-implement",
       "name": "Agent Orchestrator Implement",
-      "mode": "auto",
+      "mode": "semi",
       "position": { "x": 1300, "y": 120 },
       "inputArtifacts": [
         {
@@ -139,7 +145,7 @@
           "required": true
         }
       ],
-      "requireApproval": false,
+      "requireApproval": true,
       "maxRetries": 2,
       "riskPolicy": "medium",
       "config": {},
@@ -150,7 +156,7 @@
       "workflowId": "workflow-feature-development-loop",
       "type": "run-tests",
       "name": "Run Tests",
-      "mode": "auto",
+      "mode": "semi",
       "position": { "x": 1560, "y": 120 },
       "inputArtifacts": [
         {
@@ -166,7 +172,7 @@
           "required": true
         }
       ],
-      "requireApproval": false,
+      "requireApproval": true,
       "maxRetries": 2,
       "riskPolicy": "medium",
       "config": {},
@@ -357,6 +363,7 @@
       "sourceNodeId": "node-ai-review",
       "targetNodeId": "node-manual-claude-code-edit",
       "label": "needs changes",
+      "dashed": true,
       "condition": {}
     },
     {
@@ -365,6 +372,7 @@
       "sourceNodeId": "node-manual-claude-code-edit",
       "targetNodeId": "node-run-tests",
       "label": "retry",
+      "dashed": true,
       "condition": {}
     },
     {
