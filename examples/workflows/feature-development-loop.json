@@ -204,7 +204,7 @@
           "required": true
         }
       ],
-      "requireApproval": false,
+      "requireApproval": true,
       "maxRetries": 2,
       "riskPolicy": "low",
       "config": {
