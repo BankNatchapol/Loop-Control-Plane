@@ -183,6 +183,7 @@ const NODE_SUBNODES: Partial<Record<string, CanvasSubNode[]>> = {
     { label: "Generate Plan" },
     { label: "Generate Tasks" },
     { label: "Analyze" },
+    { label: "Checklist" },
   ],
 };
 
