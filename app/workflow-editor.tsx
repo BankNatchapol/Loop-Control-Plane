@@ -286,6 +286,8 @@ const SketchEdge = ({
 
   return (
     <>
+      {/* Wide invisible stroke for a larger click/hover target */}
+      <path d={edgePath} stroke="transparent" strokeWidth={20} fill="none" />
       {paths.map((d, i) => (
         <path key={i} d={d}
           stroke={stroke}
