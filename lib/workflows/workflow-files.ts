@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, relative, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 
 import type {
   CreateWorkflowInput,
@@ -170,7 +171,7 @@ const exportWorkflowFile = ({
     mkdirSync(dirname(resolved.absolutePath), { recursive: true });
     writeFileSync(resolved.absolutePath, workflowToJson(workflow), "utf8");
   } catch {
-    throw new WorkflowFileError("LoopBoard could not export the workflow file.");
+    throw new WorkflowFileError("Loop Control Plane could not export the workflow file.");
   }
 
   return {
@@ -266,14 +267,35 @@ const workflowPayloadToCreateInput = (
     );
   }
 
+  const workflowId = randomUUID();
+
+  // Remap all node IDs to fresh UUIDs and update edge references to match.
+  const nodeIdMap = new Map<string, string>(
+    payload.nodes.map((node) => [node.id, randomUUID()]),
+  );
+
+  const nodes = payload.nodes.map((node) => ({
+    ...node,
+    id: nodeIdMap.get(node.id) ?? randomUUID(),
+    workflowId,
+  }));
+
+  const edges = payload.edges.map((edge) => ({
+    ...edge,
+    id: randomUUID(),
+    workflowId,
+    sourceNodeId: nodeIdMap.get(edge.sourceNodeId) ?? edge.sourceNodeId,
+    targetNodeId: nodeIdMap.get(edge.targetNodeId) ?? edge.targetNodeId,
+  }));
+
   return {
-    id: payload.id,
+    id: workflowId,
     projectId,
     name: payload.name,
     description: payload.description,
     version: payload.version,
-    nodes: payload.nodes,
-    edges: payload.edges,
+    nodes,
+    edges,
     config: payload.config,
   };
 };
@@ -322,7 +344,6 @@ const findWorkflowConflict = (
     .listWorkflows(projectId)
     .find(
       (workflow) =>
-        (input.id && workflow.id === input.id) ||
         workflow.name.toLocaleLowerCase() === input.name.toLocaleLowerCase(),
     );
 

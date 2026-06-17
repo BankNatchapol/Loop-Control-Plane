@@ -508,6 +508,7 @@ type WorkflowEdgeRow = {
   source_node_id: string;
   target_node_id: string;
   label: string;
+  dashed: number;
   condition: string;
   created_at: string;
   updated_at: string;
@@ -1466,6 +1467,7 @@ const workflowEdgeFromRow = (row: WorkflowEdgeRow): WorkflowEdge => ({
   sourceNodeId: row.source_node_id,
   targetNodeId: row.target_node_id,
   label: row.label,
+  ...(row.dashed ? { dashed: true } : {}),
   condition: parseJson<Record<string, unknown>>(row.condition, {}),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -3796,10 +3798,10 @@ export class LoopBoardRepository {
       .prepare(
         `
           INSERT INTO workflow_edges (
-            id, workflow_id, source_node_id, target_node_id, label, condition,
+            id, workflow_id, source_node_id, target_node_id, label, dashed, condition,
             created_at, updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -3808,6 +3810,7 @@ export class LoopBoardRepository {
         edge.sourceNodeId,
         edge.targetNodeId,
         edge.label,
+        edge.dashed ? 1 : 0,
         json(edge.condition),
         edge.createdAt,
         edge.updatedAt,

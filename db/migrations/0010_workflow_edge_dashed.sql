@@ -1,0 +1,1 @@
+ALTER TABLE workflow_edges ADD COLUMN dashed INTEGER NOT NULL DEFAULT 0;
