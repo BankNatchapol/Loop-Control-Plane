@@ -173,6 +173,38 @@ const AO_STEPS = [
 
 const NODE_STEPS: Partial<Record<string, string[]>> = {
   "agent-orchestrator-implement": AO_STEPS,
+  "spec-kit-actions": [
+    "Read feature brief (PRD.md)",
+    "Generate spec document",
+    "Generate implementation plan",
+    "Break plan into task list",
+    "Write output files to disk",
+  ],
+  "import-tasks": [
+    "Parse tasks.md from Spec Kit",
+    "Create Loopboard tasks per entry",
+    "Link tasks to feature",
+  ],
+  "create-github-issues": [
+    "Read Loopboard task list",
+    "Create one GitHub issue per task",
+    "Link issue numbers back to tasks",
+  ],
+  "ai-review": [
+    "Read implementation branch diff",
+    "Review code against spec & plan",
+    "Write review notes output",
+  ],
+  "run-tests": [
+    "Run project test suite",
+    "Capture output & exit code",
+    "Produce test report artifact",
+  ],
+  "open-pr": [
+    "Compare implementation branch to base",
+    "Open pull request on GitHub",
+    "Link PR to workflow run",
+  ],
 };
 
 const nodeToCanvasNode = (
