@@ -189,6 +189,14 @@ const SketchNode = ({ data, selected }: NodeProps<Node<WorkflowCanvasNodeData>>)
       ? "0 0 0 3px rgba(111,151,199,0.3)"
       : "3px 4px 0 rgba(35,34,31,0.10)";
 
+  const handleStyle = {
+    background: borderColor,
+    border: `2px solid ${borderColor}`,
+    width: 12,
+    height: 12,
+    zIndex: 10,
+  };
+
   return (
     <div style={{
       borderRadius: "14px 11px 15px 12px / 12px 15px 11px 14px",
@@ -202,10 +210,6 @@ const SketchNode = ({ data, selected }: NodeProps<Node<WorkflowCanvasNodeData>>)
       position: "relative",
       transition: "box-shadow 0.15s, border-color 0.15s",
     }}>
-      <Handle id="left"   type="source" position={Position.Left}
-        style={{ background: borderColor, border: `2px solid ${borderColor}`, width: 10, height: 10, left: -6 }} />
-      <Handle id="top"    type="source" position={Position.Top}
-        style={{ background: borderColor, border: `2px solid ${borderColor}`, width: 10, height: 10, top: -6 }} />
       <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", color: m.labelColor, marginBottom: 3 }}>
         {compactText(data.type)}
       </div>
@@ -217,12 +221,13 @@ const SketchNode = ({ data, selected }: NodeProps<Node<WorkflowCanvasNodeData>>)
           position: "absolute", top: -7, right: -7,
           width: 14, height: 14, borderRadius: "50%",
           background: "#86a87d", border: "2px solid #4a7340",
+          zIndex: 11,
         }} />
       )}
-      <Handle id="right"  type="source" position={Position.Right}
-        style={{ background: borderColor, border: `2px solid ${borderColor}`, width: 10, height: 10, right: -6 }} />
-      <Handle id="bottom" type="source" position={Position.Bottom}
-        style={{ background: borderColor, border: `2px solid ${borderColor}`, width: 10, height: 10, bottom: -6 }} />
+      <Handle id="left"   type="source" position={Position.Left}   isConnectable isConnectableStart isConnectableEnd style={{ ...handleStyle, left: -7 }} />
+      <Handle id="top"    type="source" position={Position.Top}    isConnectable isConnectableStart isConnectableEnd style={{ ...handleStyle, top: -7 }} />
+      <Handle id="right"  type="source" position={Position.Right}  isConnectable isConnectableStart isConnectableEnd style={{ ...handleStyle, right: -7 }} />
+      <Handle id="bottom" type="source" position={Position.Bottom} isConnectable isConnectableStart isConnectableEnd style={{ ...handleStyle, bottom: -7 }} />
     </div>
   );
 };
@@ -863,8 +868,16 @@ export function WorkflowEditor({
     if (!source || !target) return false;
     // No self-loops
     if (source === target) return false;
-    // No duplicate edges (same source+target already exists)
+    // No duplicate edges
     if (draftWorkflow?.edges.some(e => e.sourceNodeId === source && e.targetNodeId === target)) return false;
+    if (draftWorkflow) {
+      const sourceNode = draftWorkflow.nodes.find(n => n.id === source);
+      // Human nodes: max 2 outputs (approve/reject branching)
+      // Agent nodes (auto/semi): max 1 output
+      const maxOutputs = sourceNode?.mode === "human" ? 2 : 1;
+      const outgoing = draftWorkflow.edges.filter(e => e.sourceNodeId === source).length;
+      if (outgoing >= maxOutputs) return false;
+    }
     return true;
   }, [draftWorkflow]);
 
