@@ -5,6 +5,7 @@ import {
   applyEdgeChanges,
   applyNodeChanges,
   Background,
+  ConnectionMode,
   Controls,
   getBezierPath,
   Handle,
@@ -122,8 +123,6 @@ const nodeToCanvasNode = (
   id: node.id,
   type: "sketch",
   position: node.position,
-  sourcePosition: Position.Right,
-  targetPosition: Position.Left,
   data: {
     label: node.name,
     mode: node.mode,
@@ -132,13 +131,43 @@ const nodeToCanvasNode = (
   },
 });
 
-const edgeToCanvasEdge = (edge: WorkflowEdge): Edge => ({
-  id: edge.id,
-  source: edge.sourceNodeId,
-  target: edge.targetNodeId,
-  label: edge.label || undefined,
-  animated: edge.label === "retry",
-});
+type NodePositionMap = Map<string, { x: number; y: number }>;
+
+const bestHandles = (
+  sourcePos: { x: number; y: number } | undefined,
+  targetPos: { x: number; y: number } | undefined,
+): { sourceHandle: string; targetHandle: string } => {
+  if (!sourcePos || !targetPos) return { sourceHandle: "right", targetHandle: "left" };
+  const dx = targetPos.x - sourcePos.x;
+  const dy = targetPos.y - sourcePos.y;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return dx >= 0
+      ? { sourceHandle: "right", targetHandle: "left" }
+      : { sourceHandle: "left", targetHandle: "right" };
+  }
+  return dy >= 0
+    ? { sourceHandle: "bottom", targetHandle: "top" }
+    : { sourceHandle: "top", targetHandle: "bottom" };
+};
+
+const edgeToCanvasEdge = (edge: WorkflowEdge, posMap?: NodePositionMap): Edge => {
+  const { sourceHandle, targetHandle } = bestHandles(
+    posMap?.get(edge.sourceNodeId),
+    posMap?.get(edge.targetNodeId),
+  );
+  return {
+    id: edge.id,
+    source: edge.sourceNodeId,
+    target: edge.targetNodeId,
+    label: edge.label || undefined,
+    animated: edge.label === "retry",
+    sourceHandle,
+    targetHandle,
+  };
+};
+
+const workflowPosMap = (workflow: Workflow): NodePositionMap =>
+  new Map(workflow.nodes.map((n) => [n.id, n.position]));
 
 // ===== Sketch canvas components =====
 
@@ -172,9 +201,9 @@ const SketchNode = ({ data, selected }: NodeProps<Node<WorkflowCanvasNodeData>>)
       position: "relative",
       transition: "box-shadow 0.15s, border-color 0.15s",
     }}>
-      <Handle type="target" position={Position.Left}
+      <Handle id="left"   type="source" position={Position.Left}
         style={{ background: borderColor, border: `2px solid ${borderColor}`, width: 10, height: 10, left: -6 }} />
-      <Handle type="target" position={Position.Top}
+      <Handle id="top"    type="source" position={Position.Top}
         style={{ background: borderColor, border: `2px solid ${borderColor}`, width: 10, height: 10, top: -6 }} />
       <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", color: m.labelColor, marginBottom: 3 }}>
         {compactText(data.type)}
@@ -189,9 +218,9 @@ const SketchNode = ({ data, selected }: NodeProps<Node<WorkflowCanvasNodeData>>)
           background: "#86a87d", border: "2px solid #4a7340",
         }} />
       )}
-      <Handle type="source" position={Position.Right}
+      <Handle id="right"  type="source" position={Position.Right}
         style={{ background: borderColor, border: `2px solid ${borderColor}`, width: 10, height: 10, right: -6 }} />
-      <Handle type="source" position={Position.Bottom}
+      <Handle id="bottom" type="source" position={Position.Bottom}
         style={{ background: borderColor, border: `2px solid ${borderColor}`, width: 10, height: 10, bottom: -6 }} />
     </div>
   );
@@ -595,8 +624,9 @@ export function WorkflowEditor({
   }, [currentEngineJob?.id, currentEngineJob?.logCount, currentEngineJob?.status]);
 
   const syncCanvas = useCallback((workflow: Workflow) => {
+    const posMap = workflowPosMap(workflow);
     setNodes(workflow.nodes.map((node) => nodeToCanvasNode(node)));
-    setEdges(workflow.edges.map(edgeToCanvasEdge));
+    setEdges(workflow.edges.map((e) => edgeToCanvasEdge(e, posMap)));
     setWorkflowConfigJson(formatJson(workflow.config));
     setSelectedNodeId((currentNodeId) =>
       workflow.nodes.some((node) => node.id === currentNodeId)
@@ -688,9 +718,10 @@ export function WorkflowEditor({
 
   const replaceDraftWorkflow = useCallback(
     (nextWorkflow: Workflow) => {
+      const posMap = workflowPosMap(nextWorkflow);
       setDraftWorkflow(nextWorkflow);
       setNodes(nextWorkflow.nodes.map((node) => nodeToCanvasNode(node)));
-      setEdges(nextWorkflow.edges.map(edgeToCanvasEdge));
+      setEdges(nextWorkflow.edges.map((e) => edgeToCanvasEdge(e, posMap)));
     },
     [],
   );
@@ -1454,6 +1485,7 @@ export function WorkflowEditor({
               onNodeClick={(_event, node) => setSelectedNodeId(node.id)}
               nodeTypes={nodeTypes}
               edgeTypes={edgeTypes}
+              connectionMode={ConnectionMode.Loose}
               fitView
             >
               <Background color="#c8c4ba" gap={24} size={1.5} />
