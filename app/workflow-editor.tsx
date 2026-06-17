@@ -221,7 +221,7 @@ const bestHandles = (
 };
 
 const edgeToCanvasEdge = (edge: WorkflowEdge, posMap?: NodePositionMap): Edge => {
-  const { sourceHandle, targetHandle } = bestHandles(
+  const auto = bestHandles(
     posMap?.get(edge.sourceNodeId),
     posMap?.get(edge.targetNodeId),
   );
@@ -231,8 +231,8 @@ const edgeToCanvasEdge = (edge: WorkflowEdge, posMap?: NodePositionMap): Edge =>
     target: edge.targetNodeId,
     label: edge.label || undefined,
     animated: edge.dashed === true,
-    sourceHandle,
-    targetHandle,
+    sourceHandle: edge.sourceHandle ?? auto.sourceHandle,
+    targetHandle: edge.targetHandle ?? auto.targetHandle,
   };
 };
 
@@ -1144,6 +1144,8 @@ export function WorkflowEditor({
           targetNodeId: connection.target,
           dashed: autoDashed || undefined,
         }),
+        ...(connection.sourceHandle ? { sourceHandle: connection.sourceHandle } : {}),
+        ...(connection.targetHandle ? { targetHandle: connection.targetHandle } : {}),
         createdAt: currentWorkflow.createdAt,
         updatedAt: new Date().toISOString(),
       };
@@ -1205,6 +1207,8 @@ export function WorkflowEditor({
             ...edge,
             sourceNodeId: newConnection.source!,
             targetNodeId: newConnection.target!,
+            ...(newConnection.sourceHandle ? { sourceHandle: newConnection.sourceHandle } : { sourceHandle: undefined }),
+            ...(newConnection.targetHandle ? { targetHandle: newConnection.targetHandle } : { targetHandle: undefined }),
             updatedAt: new Date().toISOString(),
           },
         ),
