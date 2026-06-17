@@ -1,5 +1,5 @@
 import type { LoopBoardRepository } from "@/lib/db/loopboard-repository";
-import { ValidationError } from "@/lib/db/loopboard-repository";
+import { NotFoundError, ValidationError } from "@/lib/db/loopboard-repository";
 import type { ListEngineJobsOptions } from "@/lib/db/loopboard-repository";
 import type {
   EngineJob,
@@ -371,15 +371,26 @@ export const getEngineStatus = (
   repository: LoopBoardRepository,
   options: { projectId?: string } = {},
 ): EngineStatusResponse => {
-  const projectId =
+  const requestedProjectId =
     options.projectId === undefined
       ? undefined
       : options.projectId.trim().length > 0
         ? options.projectId
         : undefined;
 
-  if (projectId) {
-    repository.getProject(projectId);
+  // Silently fall back to global scope when the client sends a stale project ID
+  // (e.g. after a DB reset). Throwing 404 here would break the engine panel UI.
+  let projectId: string | undefined = requestedProjectId;
+  if (requestedProjectId) {
+    try {
+      repository.getProject(requestedProjectId);
+    } catch (err) {
+      if (err instanceof NotFoundError) {
+        projectId = undefined;
+      } else {
+        throw err;
+      }
+    }
   }
 
   const jobsForCounts = repository.listEngineJobs({ projectId });
