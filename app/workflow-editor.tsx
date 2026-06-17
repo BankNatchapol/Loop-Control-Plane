@@ -1111,11 +1111,13 @@ export function WorkflowEditor({
     if (source === target) return false;
     const wf = draftWorkflowRef.current;
     if (!wf) return true;
-    if (wf.edges.some(e => e.sourceNodeId === source && e.targetNodeId === target)) return false;
     // Any node can have at most 2 outputs: one solid (main flow) + one dashed
     // (optional/loop-back). The dashed/solid toggle carries the semantic distinction.
     const maxOutputs = 2;
     const reconnecting = reconnectingEdgeRef.current;
+    // Exclude the edge being reconnected so handle-only changes (same source→target,
+    // different handle) aren't blocked by the duplicate-edge guard.
+    if (wf.edges.some(e => e.sourceNodeId === source && e.targetNodeId === target && e.id !== reconnecting?.id)) return false;
     const reconnectingFromSameSource = reconnecting?.source === source;
     const outgoing = wf.edges.filter(e => e.sourceNodeId === source).length
       - (reconnectingFromSameSource ? 1 : 0);
