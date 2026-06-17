@@ -7,6 +7,7 @@ import {
   Background,
   ConnectionMode,
   Controls,
+  EdgeLabelRenderer,
   getBezierPath,
   Handle,
   MiniMap,
@@ -41,7 +42,7 @@ import {
   Workflow as WorkflowIcon,
   XCircle,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   createProjectWorkflow,
@@ -233,6 +234,10 @@ const SketchNode = ({ data, selected }: NodeProps<Node<WorkflowCanvasNodeData>>)
   );
 };
 
+const EdgeActionsContext = createContext<{ onToggleRetry: (id: string) => void }>({
+  onToggleRetry: () => {},
+});
+
 const roughGen = rough.generator();
 
 const strSeed = (id: string) => id.split("").reduce((s, c) => s + c.charCodeAt(0), 0);
@@ -249,7 +254,8 @@ const SketchEdge = ({
   id, sourceX, sourceY, targetX, targetY,
   sourcePosition, targetPosition, selected, animated,
 }: EdgeProps) => {
-  const [edgePath] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
+  const { onToggleRetry } = useContext(EdgeActionsContext);
+  const [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
   const stroke = selected ? "#6f97c7" : "#23221f";
 
   const paths = useMemo(() => {
@@ -264,13 +270,11 @@ const SketchEdge = ({
     return drawable.sets.map(set => opsToD(set.ops));
   }, [edgePath, stroke, id]);
 
-  // Derive angle from targetPosition (which direction the bezier curve arrives from)
-  // rather than the straight-line source→target angle, which is wrong for curved paths.
   const ENTRY_ANGLE: Record<string, number> = {
-    [Position.Left]: 0,     // edge travels rightward into the left side of the node
-    [Position.Right]: 180,  // edge travels leftward into the right side
-    [Position.Top]: 90,     // edge travels downward into the top
-    [Position.Bottom]: -90, // edge travels upward into the bottom
+    [Position.Left]: 0,
+    [Position.Right]: 180,
+    [Position.Top]: 90,
+    [Position.Bottom]: -90,
   };
   const arrowAngle = ENTRY_ANGLE[targetPosition] ??
     Math.atan2(targetY - sourceY, targetX - sourceX) * (180 / Math.PI);
@@ -292,6 +296,36 @@ const SketchEdge = ({
         fill={stroke}
         transform={`translate(${targetX},${targetY}) rotate(${arrowAngle})`}
       />
+      <EdgeLabelRenderer>
+        <button
+          className="nodrag nopan"
+          title={animated ? "Switch to solid line" : "Switch to dashed line"}
+          onClick={(e) => { e.stopPropagation(); onToggleRetry(id); }}
+          style={{
+            position: "absolute",
+            transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+            pointerEvents: "all",
+            width: 18,
+            height: 18,
+            borderRadius: "50%",
+            border: `1.5px solid ${selected ? "#6f97c7" : "#b0ac9f"}`,
+            background: "#f5f4f1",
+            cursor: "pointer",
+            fontSize: 9,
+            lineHeight: 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 0,
+            opacity: selected ? 1 : 0.5,
+            transition: "opacity 0.15s, border-color 0.15s",
+            fontFamily: "monospace",
+            color: selected ? "#6f97c7" : "#6b6860",
+          }}
+        >
+          {animated ? "—" : "⋯"}
+        </button>
+      </EdgeLabelRenderer>
     </>
   );
 };
@@ -732,6 +766,26 @@ export function WorkflowEditor({
     setCanUndo(false);
     setCanRedo(false);
   }, []);
+
+  const toggleEdgeRetry = useCallback((edgeId: string) => {
+    if (draftWorkflowRef.current) pushToHistory(draftWorkflowRef.current);
+    setEdges((currentEdges) =>
+      currentEdges.map((e) => e.id !== edgeId ? e : { ...e, animated: !e.animated })
+    );
+    setDraftWorkflow((currentWorkflow) => {
+      if (!currentWorkflow) return currentWorkflow;
+      return {
+        ...currentWorkflow,
+        edges: currentWorkflow.edges.map((e) =>
+          e.id !== edgeId ? e : {
+            ...e,
+            label: e.label === "retry" ? "" : "retry",
+            updatedAt: new Date().toISOString(),
+          }
+        ),
+      };
+    });
+  }, [pushToHistory]);
 
   const replaceDraftWorkflow = useCallback(
     (nextWorkflow: Workflow) => {
@@ -1553,6 +1607,7 @@ export function WorkflowEditor({
             ))}
           </div>
           <div className="h-[34rem]" data-testid="workflow-canvas">
+            <EdgeActionsContext.Provider value={{ onToggleRetry: toggleEdgeRetry }}>
             <ReactFlow
               nodes={nodes}
               edges={edges}
@@ -1576,6 +1631,7 @@ export function WorkflowEditor({
               />
               <Controls style={{ border: "2px solid #b0ac9f", borderRadius: 8, overflow: "hidden", background: "#fcfbf8" }} />
             </ReactFlow>
+            </EdgeActionsContext.Provider>
           </div>
         </div>
 
