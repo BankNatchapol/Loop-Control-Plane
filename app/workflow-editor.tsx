@@ -234,8 +234,12 @@ const SketchNode = ({ data, selected }: NodeProps<Node<WorkflowCanvasNodeData>>)
   );
 };
 
-const EdgeActionsContext = createContext<{ onToggleDashed: (id: string) => void }>({
+const EdgeActionsContext = createContext<{
+  onToggleDashed: (id: string) => void;
+  getOutputCount: (nodeId: string) => number;
+}>({
   onToggleDashed: () => {},
+  getOutputCount: () => 0,
 });
 
 const roughGen = rough.generator();
@@ -251,10 +255,11 @@ const opsToD = (ops: Array<{ op: string; data: number[] }>): string =>
   }).filter(Boolean).join(" ");
 
 const SketchEdge = ({
-  id, sourceX, sourceY, targetX, targetY,
+  id, source, sourceX, sourceY, targetX, targetY,
   sourcePosition, targetPosition, selected, animated,
 }: EdgeProps) => {
-  const { onToggleDashed } = useContext(EdgeActionsContext);
+  const { onToggleDashed, getOutputCount } = useContext(EdgeActionsContext);
+  const outputCount = getOutputCount(source);
   const [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
   const stroke = selected ? "#6f97c7" : "#23221f";
 
@@ -296,7 +301,7 @@ const SketchEdge = ({
         fill={stroke}
         transform={`translate(${targetX},${targetY}) rotate(${arrowAngle})`}
       />
-      <EdgeLabelRenderer>
+      {outputCount >= 2 && <EdgeLabelRenderer>
         <button
           className="nodrag nopan"
           title={animated ? "Switch to solid (main flow)" : "Switch to dashed (optional path)"}
@@ -325,7 +330,7 @@ const SketchEdge = ({
         >
           {animated ? "—" : "⋯"}
         </button>
-      </EdgeLabelRenderer>
+      </EdgeLabelRenderer>}
     </>
   );
 };
@@ -767,22 +772,40 @@ export function WorkflowEditor({
     setCanRedo(false);
   }, []);
 
+  const getOutputCount = useCallback((nodeId: string) =>
+    draftWorkflowRef.current?.edges.filter(e => e.sourceNodeId === nodeId).length ?? 0
+  , []);
+
   const toggleEdgeDashed = useCallback((edgeId: string) => {
-    if (draftWorkflowRef.current) pushToHistory(draftWorkflowRef.current);
+    const wf = draftWorkflowRef.current;
+    if (!wf) return;
+    const target = wf.edges.find(e => e.id === edgeId);
+    if (!target) return;
+    pushToHistory(wf);
+
+    const newDashed = !target.dashed;
+    // Sibling edge from the same source — flip it to the opposite style
+    const sibling = wf.edges.find(
+      e => e.sourceNodeId === target.sourceNodeId && e.id !== edgeId
+    );
+    const now = new Date().toISOString();
+
     setEdges((currentEdges) =>
-      currentEdges.map((e) => e.id !== edgeId ? e : { ...e, animated: !e.animated })
+      currentEdges.map((e) => {
+        if (e.id === edgeId) return { ...e, animated: newDashed };
+        if (sibling && e.id === sibling.id) return { ...e, animated: !newDashed };
+        return e;
+      })
     );
     setDraftWorkflow((currentWorkflow) => {
       if (!currentWorkflow) return currentWorkflow;
       return {
         ...currentWorkflow,
-        edges: currentWorkflow.edges.map((e) =>
-          e.id !== edgeId ? e : {
-            ...e,
-            dashed: !e.dashed,
-            updatedAt: new Date().toISOString(),
-          }
-        ),
+        edges: currentWorkflow.edges.map((e) => {
+          if (e.id === edgeId) return { ...e, dashed: newDashed, updatedAt: now };
+          if (sibling && e.id === sibling.id) return { ...e, dashed: !newDashed, updatedAt: now };
+          return e;
+        }),
       };
     });
   }, [pushToHistory]);
@@ -945,11 +968,19 @@ export function WorkflowEditor({
         return currentWorkflow;
       }
 
+      // If source already has 1 outgoing edge, auto-mark this new one as dashed
+      // (optional path). 2-output nodes always have one solid + one dashed.
+      const existingFromSource = currentWorkflow.edges.filter(
+        e => e.sourceNodeId === connection.source
+      );
+      const autoDashed = existingFromSource.length === 1;
+
       const nextEdge = {
         ...normalizeWorkflowEdge({
           workflowId: currentWorkflow.id,
           sourceNodeId: connection.source,
           targetNodeId: connection.target,
+          dashed: autoDashed || undefined,
         }),
         createdAt: currentWorkflow.createdAt,
         updatedAt: new Date().toISOString(),
@@ -966,6 +997,7 @@ export function WorkflowEditor({
             source: nextEdge.sourceNodeId,
             target: nextEdge.targetNodeId,
             label: nextEdge.label || undefined,
+            animated: autoDashed,
             sourceHandle: connection.sourceHandle ?? undefined,
             targetHandle: connection.targetHandle ?? undefined,
           },
@@ -1607,7 +1639,7 @@ export function WorkflowEditor({
             ))}
           </div>
           <div className="h-[34rem]" data-testid="workflow-canvas">
-            <EdgeActionsContext.Provider value={{ onToggleDashed: toggleEdgeDashed }}>
+            <EdgeActionsContext.Provider value={{ onToggleDashed: toggleEdgeDashed, getOutputCount }}>
             <ReactFlow
               nodes={nodes}
               edges={edges}
