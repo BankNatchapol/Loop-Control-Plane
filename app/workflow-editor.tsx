@@ -168,8 +168,9 @@ CATALOG_GROUPS.forEach(g => g.functions.forEach(f => { TYPE_TO_GROUP[f.type] = g
 const NODE_SUBNODES: Partial<Record<string, CanvasSubNode[]>> = {
   "agent-orchestrator-implement": [
     { label: "Implement" },
-    { label: "Fix CI",  loops: true },
+    { label: "Fix CI",           loops: true },
     { label: "Open PR" },
+    { label: "Address Reviews",  loops: true },
   ],
   "pr-review-agent": [
     { label: "Fetch PR Diff" },
