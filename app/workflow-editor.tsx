@@ -42,7 +42,7 @@ import {
   Workflow as WorkflowIcon,
   XCircle,
 } from "lucide-react";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import {
   createProjectWorkflow,
@@ -109,7 +109,8 @@ import {
   workflowNodeExecutorRuntimeHint,
 } from "@/lib/workflows/workflow-executor-editor";
 
-type WorkflowCanvasNodeData = { label: string; mode: WorkflowNodeMode; type: string; group?: string; steps?: string[]; active?: boolean };
+type CanvasSubNode = { label: string; loops?: boolean };
+type WorkflowCanvasNodeData = { label: string; mode: WorkflowNodeMode; type: string; group?: string; subnodes?: CanvasSubNode[]; active?: boolean };
 
 const compactText = (value: string) => value.replaceAll("-", " ");
 
@@ -163,19 +164,17 @@ const CATALOG_GROUPS: CatalogGroup[] = [
 const TYPE_TO_GROUP: Record<string, CatalogGroup> = {};
 CATALOG_GROUPS.forEach(g => g.functions.forEach(f => { TYPE_TO_GROUP[f.type] = g; }));
 
-const AO_STEPS = [
-  "Implement",
-  "Fix CI",
-  "Open PR",
-  "Address Reviews",
-];
-
-const NODE_STEPS: Partial<Record<string, string[]>> = {
-  "agent-orchestrator-implement": AO_STEPS,
+const NODE_SUBNODES: Partial<Record<string, CanvasSubNode[]>> = {
+  "agent-orchestrator-implement": [
+    { label: "Implement" },
+    { label: "Fix CI",           loops: true },
+    { label: "Open PR" },
+    { label: "Address Reviews",  loops: true },
+  ],
   "spec-kit-actions": [
-    "Generate Spec",
-    "Generate Plan",
-    "Generate Tasks",
+    { label: "Generate Spec" },
+    { label: "Generate Plan" },
+    { label: "Generate Tasks" },
   ],
 };
 
@@ -191,7 +190,7 @@ const nodeToCanvasNode = (
     mode: node.mode,
     type: node.type,
     group: TYPE_TO_GROUP[node.type]?.label,
-    steps: NODE_STEPS[node.type],
+    subnodes: NODE_SUBNODES[node.type],
     active: node.id === activeNodeId,
   },
 });
@@ -243,6 +242,59 @@ const SKETCH_MODE: Record<WorkflowNodeMode, { border: string; bg: string; labelC
   disabled: { border: "#9a978f", bg: "#f5f4f1", labelColor: "#6f6d67" },
 };
 
+const MiniSubFlow = ({ subnodes, borderColor, labelColor }: {
+  subnodes: CanvasSubNode[];
+  borderColor: string;
+  labelColor: string;
+}) => {
+  const uid = useId();
+  const markerId = `msf-${uid.replace(/:/g, "")}`;
+  const BOX_W = 108;
+  const BOX_H = 22;
+  const ARROW_H = 13;
+  const STEP_H = BOX_H + ARROW_H;
+  const LOOP_W = 16;
+  const LEFT_PAD = LOOP_W + 2;
+  const TOTAL_W = LEFT_PAD + BOX_W + 2;
+  const TOTAL_H = subnodes.length * BOX_H + (subnodes.length - 1) * ARROW_H + 4;
+  const cx = LEFT_PAD + BOX_W / 2;
+
+  return (
+    <svg width={TOTAL_W} height={TOTAL_H} style={{ display: "block", overflow: "visible" }}>
+      <defs>
+        <marker id={markerId} markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto">
+          <polygon points="0 0, 5 2.5, 0 5" fill={borderColor} />
+        </marker>
+      </defs>
+      {subnodes.map((node, i) => {
+        const boxY = 2 + i * STEP_H;
+        const boxRight = LEFT_PAD + BOX_W;
+        return (
+          <g key={i}>
+            <rect x={LEFT_PAD} y={boxY} width={BOX_W} height={BOX_H} rx={6} ry={6}
+              fill="rgba(255,255,255,0.55)" stroke={borderColor} strokeWidth={1.5} />
+            <text x={cx} y={boxY + BOX_H / 2 + 4} textAnchor="middle"
+              fontSize={10} fontWeight={500} fill={labelColor}
+              style={{ fontFamily: "var(--font-hand)" }}>
+              {node.label}
+            </text>
+            {i < subnodes.length - 1 && (
+              <line x1={cx} y1={boxY + BOX_H} x2={cx} y2={boxY + BOX_H + ARROW_H - 2}
+                stroke={borderColor} strokeWidth={1.5} markerEnd={`url(#${markerId})`} />
+            )}
+            {node.loops && (
+              <path
+                d={`M ${boxRight} ${boxY + BOX_H - 5} C ${boxRight + LOOP_W + 4} ${boxY + BOX_H} ${boxRight + LOOP_W + 4} ${boxY} ${boxRight} ${boxY + 5}`}
+                fill="none" stroke={borderColor} strokeWidth={1.5}
+                strokeDasharray="3,2" markerEnd={`url(#${markerId})`} />
+            )}
+          </g>
+        );
+      })}
+    </svg>
+  );
+};
+
 const SketchNode = ({ data, selected }: NodeProps<Node<WorkflowCanvasNodeData>>) => {
   const m = SKETCH_MODE[data.mode as WorkflowNodeMode] ?? SKETCH_MODE.disabled;
   const borderColor = data.active ? "#86a87d" : selected ? "#6f97c7" : m.border;
@@ -280,20 +332,9 @@ const SketchNode = ({ data, selected }: NodeProps<Node<WorkflowCanvasNodeData>>)
       <div style={{ fontSize: 14, fontWeight: 600, color: "#23221f", lineHeight: 1.3 }}>
         {data.label}
       </div>
-      {data.steps && (
-        <div style={{ margin: "7px -4px 0", borderTop: `1px dashed ${m.border}`, paddingTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
-          {data.steps.map((step, i) => (
-            <div key={i} style={{
-              fontSize: 10, fontWeight: 500, color: m.labelColor,
-              background: "rgba(255,255,255,0.55)",
-              border: `1.5px solid ${m.border}`,
-              borderRadius: "8px 6px 9px 7px / 7px 9px 6px 8px",
-              padding: "3px 8px",
-              textAlign: "left",
-            }}>
-              {step}
-            </div>
-          ))}
+      {data.subnodes && (
+        <div style={{ margin: "7px -4px 0", borderTop: `1px dashed ${m.border}`, paddingTop: 7 }}>
+          <MiniSubFlow subnodes={data.subnodes} borderColor={borderColor} labelColor={m.labelColor} />
         </div>
       )}
       {data.active && (
