@@ -28,11 +28,13 @@ import {
   ExternalLink,
   GitBranch,
   Plus,
+  Redo2,
   RefreshCw,
   RotateCw,
   Save,
   SkipForward,
   StepForward,
+  Undo2,
   Upload,
   Workflow as WorkflowIcon,
   XCircle,
@@ -216,29 +218,35 @@ const SketchEdge = ({
 
   const paths = useMemo(() => {
     const drawable = roughGen.path(edgePath, {
-      roughness: 1.4,
+      roughness: 0.8,
       strokeWidth: 1.8,
       stroke,
       fill: "none",
       seed: strSeed(id),
-      disableMultiStroke: false,
+      disableMultiStroke: true,
     });
     return drawable.sets.map(set => opsToD(set.ops));
   }, [edgePath, stroke, id]);
+
+  const arrowAngle = Math.atan2(targetY - sourceY, targetX - sourceX) * (180 / Math.PI);
 
   return (
     <>
       {paths.map((d, i) => (
         <path key={i} d={d}
           stroke={stroke}
-          strokeWidth={i === 0 ? 1.8 : 1.1}
+          strokeWidth={1.8}
           fill="none"
           strokeLinecap="round"
           strokeLinejoin="round"
           strokeDasharray={animated ? "7 4" : undefined}
         />
       ))}
-      <circle cx={targetX} cy={targetY} r={3.5} fill={stroke} />
+      <polygon
+        points="-10,-5 0,0 -10,5"
+        fill={stroke}
+        transform={`translate(${targetX},${targetY}) rotate(${arrowAngle})`}
+      />
     </>
   );
 };
@@ -370,6 +378,12 @@ export function WorkflowEditor({
   const [isRunBusy, setIsRunBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+
+  const historyRef = useRef<Workflow[]>([]);
+  const futureRef = useRef<Workflow[]>([]);
+  const draftWorkflowRef = useRef<Workflow | null>(null);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
 
   const selectedNode = useMemo(
     () => draftWorkflow?.nodes.find((node) => node.id === selectedNodeId),
@@ -654,6 +668,24 @@ export function WorkflowEditor({
     );
   }, [currentRun?.currentNodeId]);
 
+  useEffect(() => {
+    draftWorkflowRef.current = draftWorkflow;
+  }, [draftWorkflow]);
+
+  const pushToHistory = useCallback((snapshot: Workflow) => {
+    historyRef.current = [...historyRef.current.slice(-49), snapshot];
+    futureRef.current = [];
+    setCanUndo(true);
+    setCanRedo(false);
+  }, []);
+
+  const resetHistory = useCallback(() => {
+    historyRef.current = [];
+    futureRef.current = [];
+    setCanUndo(false);
+    setCanRedo(false);
+  }, []);
+
   const replaceDraftWorkflow = useCallback(
     (nextWorkflow: Workflow) => {
       setDraftWorkflow(nextWorkflow);
@@ -663,12 +695,48 @@ export function WorkflowEditor({
     [],
   );
 
+  const undo = useCallback(() => {
+    const history = historyRef.current;
+    if (history.length === 0) return;
+    const previous = history[history.length - 1]!;
+    const current = draftWorkflowRef.current;
+    historyRef.current = history.slice(0, -1);
+    if (current) futureRef.current = [current, ...futureRef.current.slice(0, 49)];
+    setCanUndo(historyRef.current.length > 0);
+    setCanRedo(true);
+    replaceDraftWorkflow(previous);
+  }, [replaceDraftWorkflow]);
+
+  const redo = useCallback(() => {
+    const future = futureRef.current;
+    if (future.length === 0) return;
+    const next = future[0]!;
+    const current = draftWorkflowRef.current;
+    futureRef.current = future.slice(1);
+    if (current) historyRef.current = [...historyRef.current.slice(-49), current];
+    setCanUndo(true);
+    setCanRedo(futureRef.current.length > 0);
+    replaceDraftWorkflow(next);
+  }, [replaceDraftWorkflow]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const meta = e.metaKey || e.ctrlKey;
+      if (!meta) return;
+      if (e.key === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
+      if ((e.key === "z" && e.shiftKey) || e.key === "y") { e.preventDefault(); redo(); }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [undo, redo]);
+
   const updateSelectedNode = useCallback(
     (patch: Partial<WorkflowNode>) => {
       if (!draftWorkflow || !selectedNode) {
         return;
       }
 
+      pushToHistory(draftWorkflow);
       const nextWorkflow = {
         ...draftWorkflow,
         nodes: draftWorkflow.nodes.map((node) =>
@@ -677,11 +745,17 @@ export function WorkflowEditor({
       };
       replaceDraftWorkflow(nextWorkflow);
     },
-    [draftWorkflow, replaceDraftWorkflow, selectedNode],
+    [draftWorkflow, pushToHistory, replaceDraftWorkflow, selectedNode],
   );
 
   const onNodesChange = useCallback(
     (changes: Array<NodeChange<Node<WorkflowCanvasNodeData>>>) => {
+      // Push history snapshot when a drag ends (not on every pixel move)
+      const dragEnd = changes.some((c) => c.type === "position" && c.dragging === false);
+      if (dragEnd && draftWorkflowRef.current) {
+        pushToHistory(draftWorkflowRef.current);
+      }
+
       setNodes((currentNodes) =>
         applyNodeChanges<Node<WorkflowCanvasNodeData>>(changes, currentNodes),
       );
@@ -711,10 +785,14 @@ export function WorkflowEditor({
         };
       });
     },
-    [],
+    [pushToHistory],
   );
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
+    const hasRemoval = changes.some((c) => c.type === "remove");
+    if (hasRemoval && draftWorkflowRef.current) {
+      pushToHistory(draftWorkflowRef.current);
+    }
     setEdges((currentEdges) => applyEdgeChanges(changes, currentEdges));
     setDraftWorkflow((currentWorkflow) => {
       if (!currentWorkflow) {
@@ -736,9 +814,10 @@ export function WorkflowEditor({
         edges: currentWorkflow.edges.filter((edge) => !removedEdgeIds.has(edge.id)),
       };
     });
-  }, []);
+  }, [pushToHistory]);
 
   const onConnect = useCallback((connection: Connection) => {
+    if (draftWorkflowRef.current) pushToHistory(draftWorkflowRef.current);
     setDraftWorkflow((currentWorkflow) => {
       if (!currentWorkflow || !connection.source || !connection.target) {
         return currentWorkflow;
@@ -775,13 +854,14 @@ export function WorkflowEditor({
         edges: [...currentWorkflow.edges, nextEdge],
       };
     });
-  }, []);
+  }, [pushToHistory]);
 
   const connectSelectedNode = () => {
     if (!draftWorkflow || !selectedNode || !selectedConnectTargetId) {
       return;
     }
 
+    pushToHistory(draftWorkflow);
     const nextEdge = {
       ...normalizeWorkflowEdge({
         workflowId: draftWorkflow.id,
@@ -820,6 +900,7 @@ export function WorkflowEditor({
       return;
     }
 
+    resetHistory();
     setSelectedWorkflowId(workflow.id);
     setDraftWorkflow(workflow);
     syncCanvas(workflow);
@@ -832,6 +913,7 @@ export function WorkflowEditor({
       return;
     }
 
+    resetHistory();
     const workflow = createDraftWorkflow(project.id);
     setSelectedWorkflowId(workflow.id);
     setDraftWorkflow(workflow);
@@ -845,6 +927,7 @@ export function WorkflowEditor({
       return;
     }
 
+    pushToHistory(draftWorkflow);
     const timestamp = new Date().toISOString();
     const node = {
       ...createCatalogWorkflowNode({
@@ -1221,6 +1304,26 @@ export function WorkflowEditor({
             >
               <RefreshCw className={clsx("h-4 w-4", isLoading && "animate-spin")} />
               Reload
+            </button>
+            <button
+              type="button"
+              onClick={undo}
+              disabled={!canUndo}
+              title="Undo (⌘Z)"
+              className="inline-flex min-h-9 items-center gap-1.5 border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Undo2 className="h-4 w-4" />
+              Undo
+            </button>
+            <button
+              type="button"
+              onClick={redo}
+              disabled={!canRedo}
+              title="Redo (⌘⇧Z)"
+              className="inline-flex min-h-9 items-center gap-1.5 border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Redo2 className="h-4 w-4" />
+              Redo
             </button>
             <button
               type="button"
