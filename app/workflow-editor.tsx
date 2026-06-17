@@ -12,6 +12,7 @@ import {
   MiniMap,
   Position,
   ReactFlow,
+  reconnectEdge,
   type Connection,
   type Edge,
   type EdgeChange,
@@ -875,6 +876,8 @@ export function WorkflowEditor({
             source: nextEdge.sourceNodeId,
             target: nextEdge.targetNodeId,
             label: nextEdge.label || undefined,
+            sourceHandle: connection.sourceHandle ?? undefined,
+            targetHandle: connection.targetHandle ?? undefined,
           },
           currentEdges,
         ),
@@ -883,6 +886,34 @@ export function WorkflowEditor({
       return {
         ...currentWorkflow,
         edges: [...currentWorkflow.edges, nextEdge],
+      };
+    });
+  }, [pushToHistory]);
+
+  const onReconnect = useCallback((oldEdge: Edge, newConnection: Connection) => {
+    if (!newConnection.source || !newConnection.target) return;
+    if (draftWorkflowRef.current) pushToHistory(draftWorkflowRef.current);
+
+    setEdges((currentEdges) => reconnectEdge(oldEdge, newConnection, currentEdges));
+
+    setDraftWorkflow((currentWorkflow) => {
+      if (!currentWorkflow) return currentWorkflow;
+      const newId = normalizeWorkflowEdge({
+        workflowId: currentWorkflow.id,
+        sourceNodeId: newConnection.source!,
+        targetNodeId: newConnection.target!,
+      }).id;
+      return {
+        ...currentWorkflow,
+        edges: currentWorkflow.edges.map((edge) =>
+          edge.id !== oldEdge.id ? edge : {
+            ...edge,
+            id: newId,
+            sourceNodeId: newConnection.source!,
+            targetNodeId: newConnection.target!,
+            updatedAt: new Date().toISOString(),
+          },
+        ),
       };
     });
   }, [pushToHistory]);
@@ -1482,10 +1513,12 @@ export function WorkflowEditor({
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
+              onReconnect={onReconnect}
               onNodeClick={(_event, node) => setSelectedNodeId(node.id)}
               nodeTypes={nodeTypes}
               edgeTypes={edgeTypes}
               connectionMode={ConnectionMode.Loose}
+              reconnectRadius={20}
               fitView
             >
               <Background color="#c8c4ba" gap={24} size={1.5} />
