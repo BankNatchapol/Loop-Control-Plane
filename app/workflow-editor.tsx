@@ -164,7 +164,6 @@ const TYPE_TO_GROUP: Record<string, CatalogGroup> = {};
 CATALOG_GROUPS.forEach(g => g.functions.forEach(f => { TYPE_TO_GROUP[f.type] = g; }));
 
 const AO_STEPS = [
-  "Spawn Agent",
   "Implement",
   "Fix CI",
   "Open PR",
