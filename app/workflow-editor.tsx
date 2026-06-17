@@ -131,7 +131,8 @@ const CATALOG_GROUPS: CatalogGroup[] = [
     id: "spec-kit",
     label: "Spec Kit",
     functions: [
-      { type: "spec-kit-actions", label: "Spec + Plan + Tasks", defaultName: "Spec Kit" },
+      { type: "spec-kit-actions",  label: "Spec + Plan + Tasks", defaultName: "Spec Kit"         },
+      { type: "spec-kit-clarify",  label: "Clarify",             defaultName: "Spec Kit Clarify" },
     ],
   },
   {
@@ -181,6 +182,7 @@ const NODE_SUBNODES: Partial<Record<string, CanvasSubNode[]>> = {
     { label: "Generate Spec" },
     { label: "Generate Plan" },
     { label: "Generate Tasks" },
+    { label: "Analyze" },
   ],
 };
 

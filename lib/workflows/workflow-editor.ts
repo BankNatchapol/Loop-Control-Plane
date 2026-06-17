@@ -20,6 +20,7 @@ export const workflowNodeTypes = [
   "human-input",
   "human-review",
   "spec-kit-actions",
+  "spec-kit-clarify",
   "import-tasks",
   "create-github-issues",
   "agent-orchestrator-implement",
@@ -157,6 +158,21 @@ export const workflowNodeCatalog: Array<{
       { name: "tasks", path: "specs/{feature}/tasks.md", required: true },
     ],
     config: catalogNodeConfig("spec-kit-actions"),
+  },
+  {
+    type: "spec-kit-clarify",
+    name: "Spec Kit Clarify",
+    mode: "human",
+    requireApproval: true,
+    maxRetries: 0,
+    riskPolicy: "manual-only",
+    inputArtifacts: [
+      { name: "spec", path: "specs/{feature}/spec.md", required: true },
+    ],
+    outputArtifacts: [
+      { name: "clarified-spec", path: "specs/{feature}/spec.md", required: true },
+    ],
+    config: {},
   },
   {
     type: "import-tasks",

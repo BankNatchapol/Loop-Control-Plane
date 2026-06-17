@@ -50,12 +50,32 @@
       "currentState": "idle"
     },
     {
+      "id": "node-spec-kit-clarify",
+      "workflowId": "workflow-feature-development-loop",
+      "type": "spec-kit-clarify",
+      "name": "Spec Kit Clarify",
+      "guidance": "Run `speckit.clarify` in your terminal to let the AI surface underspecified areas and ask clarifying questions. Answer them, then approve here to proceed to plan and task generation.",
+      "mode": "human",
+      "position": { "x": 520, "y": 120 },
+      "inputArtifacts": [
+        { "name": "spec", "path": "specs/{feature}/spec.md", "required": true }
+      ],
+      "outputArtifacts": [
+        { "name": "clarified-spec", "path": "specs/{feature}/spec.md", "required": true }
+      ],
+      "requireApproval": true,
+      "maxRetries": 0,
+      "riskPolicy": "manual-only",
+      "config": {},
+      "currentState": "idle"
+    },
+    {
       "id": "node-human-review",
       "workflowId": "workflow-feature-development-loop",
       "type": "human-review",
       "name": "Human Review",
       "mode": "human",
-      "position": { "x": 520, "y": 120 },
+      "position": { "x": 780, "y": 120 },
       "inputArtifacts": [
         { "name": "spec", "path": "specs/{feature}/spec.md", "required": true },
         { "name": "plan", "path": "specs/{feature}/plan.md", "required": true },
@@ -80,7 +100,7 @@
       "type": "import-tasks",
       "name": "Import Tasks",
       "mode": "semi",
-      "position": { "x": 780, "y": 120 },
+      "position": { "x": 1040, "y": 120 },
       "inputArtifacts": [
         { "name": "tasks", "path": "specs/{feature}/tasks.md", "required": true }
       ],
@@ -103,7 +123,7 @@
       "type": "create-github-issues",
       "name": "Create GitHub Issues",
       "mode": "semi",
-      "position": { "x": 1040, "y": 120 },
+      "position": { "x": 1300, "y": 120 },
       "inputArtifacts": [
         {
           "name": "loopboard-tasks",
@@ -131,7 +151,7 @@
       "name": "Agent Orchestrator Implement",
       "guidance": "AO spawns one agent per GitHub issue. Each agent works in its own worktree and branch, implements the feature, self-fixes CI failures, opens a PR, then loops on review comments until the PR is approved. To automate the review step, install PR Agent as a GitHub Action on the repo — it posts review comments automatically when AO opens a PR, which AO then addresses. The workflow pauses only when human judgment is required.",
       "mode": "semi",
-      "position": { "x": 1300, "y": 120 },
+      "position": { "x": 1820, "y": 120 },
       "inputArtifacts": [
         {
           "name": "github-issues",
@@ -162,7 +182,7 @@
       "type": "run-tests",
       "name": "Run Tests",
       "mode": "semi",
-      "position": { "x": 1560, "y": 120 },
+      "position": { "x": 2080, "y": 120 },
       "inputArtifacts": [
         {
           "name": "implementation-branch",
@@ -189,7 +209,7 @@
       "type": "ai-review",
       "name": "AI Review",
       "mode": "semi",
-      "position": { "x": 1820, "y": 120 },
+      "position": { "x": 2340, "y": 120 },
       "inputArtifacts": [
         {
           "name": "implementation-branch",
@@ -221,7 +241,7 @@
       "type": "manual-claude-code-edit",
       "name": "Manual Claude Code Edit",
       "mode": "human",
-      "position": { "x": 1820, "y": 320 },
+      "position": { "x": 2340, "y": 320 },
       "inputArtifacts": [
         {
           "name": "review-notes",
@@ -248,7 +268,7 @@
       "type": "open-pr",
       "name": "Open PR",
       "mode": "semi",
-      "position": { "x": 2080, "y": 120 },
+      "position": { "x": 2600, "y": 120 },
       "inputArtifacts": [
         {
           "name": "implementation-branch",
@@ -275,7 +295,7 @@
       "type": "merge",
       "name": "Merge",
       "mode": "human",
-      "position": { "x": 2340, "y": 120 },
+      "position": { "x": 2860, "y": 120 },
       "inputArtifacts": [
         {
           "name": "pull-request",
@@ -307,11 +327,28 @@
       "condition": {}
     },
     {
-      "id": "edge-node-spec-kit-actions-to-node-human-review",
+      "id": "edge-node-spec-kit-actions-to-node-spec-kit-clarify",
       "workflowId": "workflow-feature-development-loop",
       "sourceNodeId": "node-spec-kit-actions",
-      "targetNodeId": "node-human-review",
+      "targetNodeId": "node-spec-kit-clarify",
       "label": "next",
+      "condition": {}
+    },
+    {
+      "id": "edge-node-spec-kit-clarify-to-node-human-review",
+      "workflowId": "workflow-feature-development-loop",
+      "sourceNodeId": "node-spec-kit-clarify",
+      "targetNodeId": "node-human-review",
+      "label": "approved",
+      "condition": {}
+    },
+    {
+      "id": "edge-node-spec-kit-clarify-to-node-spec-kit-actions",
+      "workflowId": "workflow-feature-development-loop",
+      "sourceNodeId": "node-spec-kit-clarify",
+      "targetNodeId": "node-spec-kit-actions",
+      "label": "needs more",
+      "dashed": true,
       "condition": {}
     },
     {

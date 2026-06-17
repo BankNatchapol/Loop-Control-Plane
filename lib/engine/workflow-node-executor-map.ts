@@ -5,6 +5,7 @@ import { defaultExecutorConfig } from "@/lib/engine/loop-engine-types";
 export const WORKFLOW_APPROVAL_GATE_NODE_TYPES = [
   "human-input",
   "human-review",
+  "spec-kit-clarify",
   "manual-claude-code-edit",
   "merge",
 ] as const;
@@ -70,6 +71,16 @@ export const workflowNodeExecutorMap: Record<
     ],
     approvalGate: false,
     notes: "Invokes Spec Kit CLI to generate spec.md, plan.md, and tasks.md.",
+  },
+  "spec-kit-clarify": {
+    nodeType: "spec-kit-clarify",
+    executorModule: null,
+    defaultBackend: "stub",
+    defaultExecutor: {},
+    reuseDirectly: [],
+    needsAdapter: [],
+    approvalGate: true,
+    notes: "Human-driven clarification loop. Operator runs `speckit.clarify` interactively; approve when done.",
   },
   "import-tasks": {
     nodeType: "import-tasks",
