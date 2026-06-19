@@ -11,13 +11,21 @@ import {
   LoopBoardRepository,
   UnsupportedTransitionError,
 } from "@/lib/db/loopboard-repository";
-import { seedFeatures, seedProject, seedTasks, seedWorkflows } from "@/lib/loopboard";
 import {
+  seedFeatures,
+  seedProject,
+  seedTasks,
+  seedWorkflows,
+  type WorkflowArtifact,
+} from "@/lib/loopboard";
+import {
+  abandonWorkflowRun,
   approveWorkflowRunStep,
   completeWorkflowStepFromEngineJob,
   failWorkflowRunStep,
   runNextWorkflowStep,
   runNextWorkflowStepWithEngineTick,
+  skipWorkflowRunStep,
   startWorkflowRun,
 } from "@/lib/workflows/workflow-runner";
 
@@ -36,6 +44,181 @@ const withRepository = (test: (repository: LoopBoardRepository) => void) => {
 };
 
 describe("Workflow runner", () => {
+  it("uses linked feature artifact paths instead of template feature placeholders", () => {
+    withRepository((repository) => {
+      repository.updateFeature(seedFeatures[0].id, {
+        artifactFolderPath: ".",
+        prdPath: "PRD.md",
+        specPath: "spec.md",
+        planPath: "plan.md",
+        tasksPath: "tasks.md",
+        decisionsPath: "decisions.md",
+      });
+      const run = startWorkflowRun({
+        repository,
+        input: {
+          workflowId: seedWorkflows[0].id,
+          featureId: seedFeatures[0].id,
+        },
+      });
+
+      runNextWorkflowStep({ repository, runId: run.id });
+      const afterHumanInput = approveWorkflowRunStep({
+        repository,
+        runId: run.id,
+      });
+      assert.equal(
+        afterHumanInput.steps[0]?.outputArtifacts[0]?.path,
+        "PRD.md",
+      );
+
+      runNextWorkflowStep({ repository, runId: run.id });
+      approveWorkflowRunStep({ repository, runId: run.id });
+      const job = repository
+        .listEngineJobs({ status: "queued" })
+        .find((candidate) => candidate.workflowRunId === run.id);
+      const inputArtifacts = job?.payload.inputArtifacts as
+        | WorkflowArtifact[]
+        | undefined;
+      const outputArtifacts = job?.payload.outputArtifacts as
+        | WorkflowArtifact[]
+        | undefined;
+
+      assert.equal(inputArtifacts?.[0]?.path, "PRD.md");
+      assert.deepEqual(
+        outputArtifacts?.map((artifact) => artifact.path),
+        ["spec.md", "plan.md", "tasks.md", "checklist.md"],
+      );
+    });
+  });
+
+  it("inherits exact run input artifacts through the initial manual edit", () => {
+    withRepository((repository) => {
+      const workflow = repository.createWorkflow({
+        id: "workflow-resumable-artifacts",
+        projectId: seedProject.id,
+        name: "Resumable artifacts",
+        nodes: [
+          {
+            id: "manual",
+            type: "manual-claude-code-edit",
+            name: "Manual Edit",
+            mode: "human",
+            position: { x: 0, y: 0 },
+            inputArtifacts: [
+              {
+                name: "implementation-branch",
+                path: "git://{repository}/{branch}",
+                required: true,
+              },
+            ],
+            outputArtifacts: [
+              {
+                name: "manual-patch",
+                path: "git://{repository}/{branch}",
+                required: true,
+              },
+            ],
+            requireApproval: true,
+            maxRetries: 0,
+            riskPolicy: "manual-only",
+            config: {},
+            currentState: "idle",
+          },
+        ],
+        edges: [],
+      });
+      const branch =
+        "git://bank-p/loop-control-plane/feature/resumable-artifacts";
+      const run = startWorkflowRun({
+        repository,
+        input: {
+          workflowId: workflow.id,
+          featureId: seedFeatures[0].id,
+          inputArtifacts: [
+            { name: "implementation-branch", path: branch, required: true },
+          ],
+        },
+      });
+
+      runNextWorkflowStep({ repository, runId: run.id });
+      const approved = approveWorkflowRunStep({ repository, runId: run.id });
+
+      assert.equal(approved.steps[0]?.inputArtifacts[0]?.path, branch);
+      assert.equal(approved.steps[0]?.outputArtifacts[0]?.path, branch);
+    });
+  });
+
+  it("pins the workflow graph and blocks duplicate feature runs until abandon", () => {
+    withRepository((repository) => {
+      const workflow = repository.getWorkflow(seedWorkflows[0].id);
+      const run = startWorkflowRun({
+        repository,
+        input: { workflowId: workflow.id, featureId: seedFeatures[0].id },
+      });
+      repository.updateWorkflow(workflow.id, {
+        name: "Changed after run start",
+        nodes: workflow.nodes.slice(0, 1),
+        edges: [],
+      });
+
+      const paused = runNextWorkflowStep({ repository, runId: run.id });
+      assert.equal(paused.currentNodeId, "node-human-input");
+      assert.equal(paused.workflowSnapshot.name, workflow.name);
+
+      assert.throws(
+        () =>
+          startWorkflowRun({
+            repository,
+            input: { workflowId: workflow.id, featureId: seedFeatures[0].id },
+          }),
+        /resumable workflow run/u,
+      );
+      abandonWorkflowRun({ repository, runId: run.id });
+      const replacement = startWorkflowRun({
+        repository,
+        input: { workflowId: workflow.id, featureId: seedFeatures[0].id },
+      });
+      assert.notEqual(replacement.id, run.id);
+    });
+  });
+
+  it("does not let non-resumable interrupted history block a new feature run", () => {
+    withRepository((repository) => {
+      const workflow = repository.getWorkflow(seedWorkflows[0].id);
+      const staleRun = repository.createWorkflowRun({
+        workflowId: workflow.id,
+        featureId: seedFeatures[0].id,
+        status: "interrupted",
+        interruption: {
+          reason: "Application stopped before the workflow selected a node.",
+          interruptedAt: new Date().toISOString(),
+          previousStatus: "running",
+        },
+      });
+
+      assert.equal(staleRun.currentNodeId, undefined);
+      assert.equal(
+        repository.getResumableWorkflowRunForFeature(
+          seedProject.id,
+          seedFeatures[0].id,
+        ),
+        undefined,
+      );
+
+      const replacement = startWorkflowRun({
+        repository,
+        input: {
+          workflowId: workflow.id,
+          featureId: seedFeatures[0].id,
+        },
+      });
+
+      assert.notEqual(replacement.id, staleRun.id);
+      assert.equal(replacement.status, "running");
+    });
+  });
+
   it("starts runs, pauses at human nodes, and advances after approval", () => {
     withRepository((repository) => {
       const run = startWorkflowRun({
@@ -71,6 +254,29 @@ describe("Workflow runner", () => {
       assert.equal(semiPaused.status, "paused");
       assert.equal(semiPaused.currentNodeId, "node-spec-kit-actions");
       assert.equal(semiPaused.steps.at(-1)?.status, "waiting-approval");
+    });
+  });
+
+  it("skips the current node without requiring disabled mode", () => {
+    withRepository((repository) => {
+      const run = startWorkflowRun({
+        repository,
+        input: { workflowId: seedWorkflows[0].id, featureId: seedFeatures[0].id },
+      });
+
+      const paused = runNextWorkflowStep({ repository, runId: run.id });
+      assert.equal(paused.status, "paused");
+      assert.equal(paused.steps[0]?.status, "waiting-approval");
+
+      const skipped = skipWorkflowRunStep({ repository, runId: run.id });
+      assert.equal(skipped.status, "running");
+      assert.equal(skipped.currentNodeId, "node-spec-kit-actions");
+      assert.equal(skipped.steps[0]?.status, "skipped");
+      assert.equal(skipped.steps[0]?.workflowNodeId, "node-human-input");
+      assert.match(
+        skipped.steps[0]?.executionLogs.at(-1)?.message ?? "",
+        /skipped by the operator/i,
+      );
     });
   });
 
@@ -385,12 +591,13 @@ describe("Workflow runner", () => {
 
       runNextWorkflowStep({ repository, runId: run.id });
       approveWorkflowRunStep({ repository, runId: run.id });
-      runNextWorkflowStep({ repository, runId: run.id });
+      const waiting = runNextWorkflowStep({ repository, runId: run.id });
       const delegated = approveWorkflowRunStep({ repository, runId: run.id });
 
       assert.equal(delegated.status, "running");
       assert.equal(delegated.currentNodeId, "node-spec-kit-actions");
       assert.equal(delegated.steps.at(-1)?.status, "running");
+      assert.equal(delegated.steps.at(-1)?.attempt, waiting.steps.at(-1)?.attempt);
       assert.match(
         delegated.steps.at(-1)?.executionLogs.at(-1)?.message ?? "",
         /enqueued engine job/u,
@@ -438,7 +645,12 @@ describe("Workflow runner", () => {
             requireApproval: false,
             maxRetries: 1,
             riskPolicy: "low",
-            config: {},
+            config: {
+              executor: {
+                backend: "cursor",
+                timeoutMs: 120_000,
+              },
+            },
             currentState: "idle",
           },
         ],
@@ -457,7 +669,12 @@ describe("Workflow runner", () => {
         .listEngineJobs()
         .filter((job) => job.workflowRunId === run.id);
       assert.equal(jobs.length, 1);
+      assert.equal(jobs[0]?.backend, "stub");
       assert.equal(jobs[0]?.payload.nodeType, "import-tasks");
+      assert.equal(
+        (jobs[0]?.payload.executor as { backend?: string } | undefined)?.backend,
+        "cursor",
+      );
     });
   });
 

@@ -95,7 +95,7 @@ type CiCheck = {
 const githubApiHeaders = (token: string) => ({
   Accept: "application/vnd.github+json",
   Authorization: `Bearer ${token}`,
-  "User-Agent": "LoopBoard",
+  "User-Agent": "Loop Control Plane",
   "X-GitHub-Api-Version": "2022-11-28",
 });
 

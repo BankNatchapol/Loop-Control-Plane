@@ -94,7 +94,7 @@ export const readFeatureArtifactDocument = ({
     }
 
     throw new FeatureArtifactDocumentError(
-      `LoopBoard could not read ${resolvedArtifact.fileName}.`,
+      `Loop Control Plane could not read ${resolvedArtifact.fileName}.`,
       500,
       "read_error",
     );
@@ -123,7 +123,7 @@ export const writeFeatureArtifactDocument = ({
     writeFileSync(resolvedArtifact.absolutePath, content, "utf8");
   } catch {
     throw new FeatureArtifactDocumentError(
-      `LoopBoard could not save ${resolvedArtifact.fileName}.`,
+      `Loop Control Plane could not save ${resolvedArtifact.fileName}.`,
       500,
       "write_error",
     );

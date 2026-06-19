@@ -1,0 +1,3 @@
+[submodule "vendor/agent-orchestrator"]
+	path = vendor/agent-orchestrator
+	url = https://github.com/BankNatchapol/agent-orchestrator.git

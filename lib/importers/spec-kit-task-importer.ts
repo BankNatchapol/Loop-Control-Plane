@@ -262,7 +262,7 @@ export class SpecKitTaskImporter {
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Unknown file error.";
       throw new TaskContextActionError(
-        `LoopBoard could not write imported task context files: ${reason}`,
+        `Loop Control Plane could not write imported task context files: ${reason}`,
       );
     }
   }

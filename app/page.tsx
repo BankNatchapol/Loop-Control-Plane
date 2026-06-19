@@ -37,6 +37,7 @@ import {
   Pencil,
   Play,
   Plus,
+  Power,
   RefreshCw,
   RotateCw,
   RotateCcw,
@@ -80,6 +81,7 @@ import {
   type ProjectFileResult,
   retryEngineJob,
   resumeWorkflowRunFromEngine,
+  requestManagedShutdown,
   generatePersistedTaskClaudeCodePrompt,
   importSpecKitTasks,
   movePersistedTask,
@@ -125,6 +127,22 @@ import {
 import type { TaskContextStatus } from "@/lib/context/task-context-service";
 import type { BoardData, PersistedTask } from "@/lib/db/loopboard-repository";
 import { WorkflowEditor } from "@/app/workflow-editor";
+import { AoAgentsTab, AoReviewsTab } from "@/components/ao/ao-workspace";
+import {
+  AoRuntimeBadge,
+  AoRuntimePanel,
+  aoHandoffState,
+} from "@/components/ao/ao-runtime-panel";
+import { SessionDetailDrawer } from "@/components/ao/session-detail-drawer";
+import { AoMuxProvider } from "@/components/ao/mux-provider";
+import type { AoDashboardSession } from "@/lib/ao-bridge/types";
+import {
+  fetchAoBridgeHealth,
+  fetchAoBridgeSession,
+  fetchAoBridgeTerminalConfig,
+  killAoBridgeSession,
+  syncAoBridgeRuntime,
+} from "@/lib/api/ao-actions";
 import {
   defaultAutomationSettings,
   describeEffectiveAutomationPolicy,
@@ -155,13 +173,19 @@ import {
   formatTimestamp,
   riskStyle,
   statusLabel,
-  tasksByStatus,
 } from "@/lib/loopboard";
+import {
+  countActivePoolSlots,
+  readPoolStateForTask,
+  tasksByStatusWithPoolOverlay,
+} from "@/lib/loopboard-pool-overlay";
+import type { AoWorkerPoolSnapshot } from "@/lib/engine/ao-worker-pool-types";
 
 const SELECTED_PROJECT_STORAGE_KEY = "loopboard.ui.selected-project-id";
 const SELECTED_TASK_STORAGE_KEY = "loopboard.ui.selected-task-id";
 const SELECTED_FEATURE_STORAGE_KEY = "loopboard.ui.selected-feature-id";
 const BOARD_QUICK_FILTER_STORAGE_KEY = "loopboard.ui.board-quick-filter";
+const managedRuntimeEnabled = process.env.NEXT_PUBLIC_LOOPBOARD_MANAGED === "1";
 
 const emptyBoardData: BoardData = {
   projects: [],
@@ -486,60 +510,6 @@ const eventLinkEntries = (
 const extractUrls = (value: string): string[] =>
   Array.from(new Set(value.match(/https?:\/\/[^\s)]+/gu) ?? []));
 
-function aoHandoffState(task: Task): {
-  label: string;
-  message: string;
-  className: string;
-} {
-  const hasIssue = Boolean(task.github.issueNumber || task.github.issueUrl);
-
-  if (!hasIssue) {
-    return {
-      label: "ao not linked",
-      message: "Create a GitHub issue before preparing Agent Orchestrator handoff.",
-      className: "border-slate-200 bg-slate-50 text-slate-600",
-    };
-  }
-
-  if (task.github.issueLabels?.includes("ao-ready")) {
-    return {
-      label: "ao ready",
-      message: "This linked issue is marked ao-ready for Agent Orchestrator handoff.",
-      className: "border-emerald-200 bg-emerald-50 text-emerald-800",
-    };
-  }
-
-  if (task.owner !== "ai") {
-    return {
-      label: "ao waiting",
-      message: "Assign this task to AI before applying ao-ready.",
-      className: "border-slate-200 bg-slate-50 text-slate-600",
-    };
-  }
-
-  if (task.risk === "low") {
-    return {
-      label: "ao pending",
-      message: "Low-risk AI assignment can receive ao-ready on assignment.",
-      className: "border-sky-200 bg-sky-50 text-sky-800",
-    };
-  }
-
-  if (task.github.aoReadyApprovedAt) {
-    return {
-      label: "ao approved",
-      message: "Local risk approval is recorded; ao-ready can be applied on assignment.",
-      className: "border-sky-200 bg-sky-50 text-sky-800",
-    };
-  }
-
-  return {
-    label: "ao approval needed",
-    message: "Medium, high, and critical risk tasks require local approval before ao-ready.",
-    className: "border-orange-200 bg-orange-50 text-orange-800",
-  };
-}
-
 const taskHasFailedCi = (task: Task) =>
   task.github.ciStatus === "failing" ||
   task.github.deliveryStatus === "ci-failed";
@@ -689,6 +659,8 @@ function BoardColumn({
   featuresById,
   selectedTaskId,
   taskRunJobsByTaskId,
+  activeAoWorkerPool,
+  poolTaskIds,
   onSelectTask,
 }: {
   id: KanbanStatus;
@@ -697,9 +669,17 @@ function BoardColumn({
   featuresById: Map<string, Feature>;
   selectedTaskId: string;
   taskRunJobsByTaskId: Map<string, EngineJobSummary>;
+  activeAoWorkerPool?: AoWorkerPoolSnapshot;
+  poolTaskIds: Set<string>;
   onSelectTask: (taskId: string) => void;
 }) {
   const { isOver, setNodeRef } = useDroppable({ id });
+  const columnLabel =
+    id === "ai-running" && activeAoWorkerPool
+      ? `${label} · ${countActivePoolSlots(activeAoWorkerPool)} / ${
+          activeAoWorkerPool.maxWorkers > 0 ? activeAoWorkerPool.maxWorkers : "∞"
+        } slots`
+      : label;
 
   return (
     <section
@@ -712,7 +692,7 @@ function BoardColumn({
       <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 px-3 py-3 backdrop-blur">
         <div className="flex items-center justify-between gap-3">
           <h2 className="min-w-0 text-sm font-semibold text-slate-950">
-            {label}
+            {columnLabel}
           </h2>
           <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-semibold text-slate-600">
             {tasks.length}
@@ -728,6 +708,11 @@ function BoardColumn({
             feature={featuresById.get(task.featureId)}
             selected={task.id === selectedTaskId}
             engineJob={taskRunJobsByTaskId.get(task.id)}
+            poolState={readPoolStateForTask(task.id, activeAoWorkerPool)}
+            poolLocked={poolTaskIds.has(task.id)}
+            poolSkipReason={
+              activeAoWorkerPool?.items.find((item) => item.taskId === task.id)?.skipReason
+            }
             onSelectTask={onSelectTask}
           />
         ))}
@@ -746,12 +731,18 @@ function TaskCard({
   feature,
   selected,
   engineJob,
+  poolState,
+  poolLocked,
+  poolSkipReason,
   onSelectTask,
 }: {
   task: Task;
   feature?: Feature;
   selected: boolean;
   engineJob?: EngineJobSummary;
+  poolState?: string;
+  poolLocked?: boolean;
+  poolSkipReason?: string;
   onSelectTask: (taskId: string) => void;
 }) {
   const {
@@ -760,7 +751,7 @@ function TaskCard({
     setNodeRef,
     transform,
     isDragging,
-  } = useDraggable({ id: task.id });
+  } = useDraggable({ id: task.id, disabled: poolLocked === true });
   const OwnerIcon = ownerIcon[task.owner];
   const sourceArtifactPaths = taskSourceArtifactPaths(task);
   const aoState = aoHandoffState(task);
@@ -804,6 +795,14 @@ function TaskCard({
                 data-testid={`task-engine-badge-${task.id}`}
               >
                 engine running
+              </span>
+            ) : null}
+            {poolState ? (
+              <span
+                className="border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-violet-800"
+                title={poolSkipReason}
+              >
+                pool {poolState}
               </span>
             ) : null}
             <span className={clsx("border px-1.5 py-0.5 text-[10px] font-semibold uppercase", riskStyle(task.risk))}>
@@ -860,6 +859,7 @@ function TaskCard({
               {aoState.label}
             </span>
           ) : null}
+          <AoRuntimeBadge task={task} />
           {task.github.pullRequestNumber ? (
             <MetaPill
               icon={GitPullRequest}
@@ -1290,6 +1290,7 @@ const engineSchedulerStyles: Record<EngineSchedulerState, string> = {
 const engineJobStatusStyles: Record<EngineJobStatus, string> = {
   queued: "border-sky-200 bg-sky-50 text-sky-800",
   running: "border-indigo-200 bg-indigo-50 text-indigo-800",
+  interrupted: "border-amber-200 bg-amber-50 text-amber-800",
   completed: "border-emerald-200 bg-emerald-50 text-emerald-800",
   failed: "border-red-200 bg-red-50 text-red-800",
   cancelled: "border-slate-200 bg-slate-100 text-slate-600",
@@ -1313,6 +1314,7 @@ function LoopEnginePanel({
   onStopScheduler,
   onRefresh,
   onWorkflowResumed,
+  onOpenAoSession,
 }: {
   project?: Project;
   engineStatus: EngineStatusResponse | null;
@@ -1331,6 +1333,7 @@ function LoopEnginePanel({
   onStopScheduler: () => void;
   onRefresh: () => void;
   onWorkflowResumed: () => void;
+  onOpenAoSession?: (sessionId: string) => void;
 }) {
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [jobDetail, setJobDetail] = useState<EngineJobDetail | null>(null);
@@ -1826,7 +1829,14 @@ function LoopEnginePanel({
                       {compactText(job.status)}
                     </span>
                   </td>
-                  <td className="px-2 py-1.5 uppercase">{job.backend}</td>
+                  <td className="px-2 py-1.5">
+                    <span className="uppercase">{job.runtimeLabel ?? job.backend}</span>
+                    {job.runtimeLabel && job.backend === "stub" ? (
+                      <span className="block text-[10px] normal-case text-slate-500">
+                        built-in dispatcher
+                      </span>
+                    ) : null}
+                  </td>
                   <td className="max-w-xs px-2 py-1.5">
                     <p className="truncate text-slate-700">
                       {job.lastLogMessage ?? `${job.logCount} log entries`}
@@ -2058,7 +2068,19 @@ function LoopEnginePanel({
                     </p>
                     <ul className="mt-1 space-y-1 font-mono text-[10px] text-slate-700">
                       {jobDetail.externalSessionIds.map((sessionId) => (
-                        <li key={sessionId}>{sessionId}</li>
+                        <li key={sessionId}>
+                          {onOpenAoSession ? (
+                            <button
+                              type="button"
+                              className="text-left text-sky-700 underline decoration-dotted underline-offset-2 hover:text-sky-900"
+                              onClick={() => onOpenAoSession(sessionId)}
+                            >
+                              {sessionId}
+                            </button>
+                          ) : (
+                            sessionId
+                          )}
+                        </li>
                       ))}
                     </ul>
                   </>
@@ -2080,9 +2102,9 @@ function LoopEnginePanel({
                     Policy Decisions
                   </p>
                   <ul className="mt-2 space-y-1 text-xs text-slate-700">
-                    {jobDetail.policyDecisions.map((decision) => (
+                    {jobDetail.policyDecisions.map((decision, index) => (
                       <li
-                        key={`${decision.timestamp}-${decision.message}`}
+                        key={`${decision.timestamp}-${decision.message}-${index}`}
                         className="border border-slate-200 bg-white px-2 py-1"
                       >
                         <span className="font-mono text-[10px] text-slate-500">
@@ -2104,9 +2126,9 @@ function LoopEnginePanel({
                   Execution Log Timeline
                 </p>
                 <ul className="mt-2 max-h-64 space-y-1 overflow-auto text-xs text-slate-700">
-                  {jobDetail.executionLogs.map((entry) => (
+                  {jobDetail.executionLogs.map((entry, index) => (
                     <li
-                      key={`${entry.timestamp}-${entry.message}`}
+                      key={`${entry.timestamp}-${entry.message}-${index}`}
                       className="border border-slate-200 bg-white px-2 py-1"
                     >
                       <span className="font-mono text-[10px] text-slate-500">
@@ -2405,23 +2427,66 @@ function ProjectForm({
               className="min-h-9 border border-slate-300 bg-white px-2 font-mono text-sm font-normal normal-case text-slate-950"
             />
           </label>
-          <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500 md:col-span-2 xl:col-span-1">
-            AO Dashboard URL
+          <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+            Max Concurrent AO Workers
             <input
-              value={form.engineSettings.agentOrchestrator?.dashboardUrl ?? ""}
+              type="number"
+              min={0}
+              disabled={(form.engineSettings.agentOrchestrator?.maxConcurrentWorkers ?? 2) === 0}
+              value={
+                (form.engineSettings.agentOrchestrator?.maxConcurrentWorkers ?? 2) === 0
+                  ? ""
+                  : String(form.engineSettings.agentOrchestrator?.maxConcurrentWorkers ?? 2)
+              }
+              onChange={(event) => {
+                const parsed = Number.parseInt(event.target.value, 10);
+                onChange("engineSettings", {
+                  ...form.engineSettings,
+                  agentOrchestrator: {
+                    ...form.engineSettings.agentOrchestrator,
+                    maxConcurrentWorkers:
+                      Number.isInteger(parsed) && parsed >= 0 ? parsed : 2,
+                  },
+                });
+              }}
+              placeholder="2"
+              className="min-h-9 border border-slate-300 bg-white px-2 text-sm font-normal normal-case text-slate-950"
+            />
+          </label>
+          <label className="flex min-h-9 items-center gap-2 text-xs font-semibold uppercase text-slate-700">
+            <input
+              type="checkbox"
+              checked={(form.engineSettings.agentOrchestrator?.maxConcurrentWorkers ?? 2) === 0}
               onChange={(event) =>
                 onChange("engineSettings", {
                   ...form.engineSettings,
                   agentOrchestrator: {
                     ...form.engineSettings.agentOrchestrator,
-                    dashboardUrl: event.target.value,
+                    maxConcurrentWorkers: event.target.checked ? 0 : 2,
                   },
                 })
               }
-              placeholder="http://localhost:3000"
-              className="min-h-9 border border-slate-300 bg-white px-2 font-mono text-sm font-normal normal-case text-slate-950"
+              className="h-4 w-4 shrink-0 accent-slate-900"
+            />
+            Unlimited parallel AO workers
+          </label>
+          <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500 md:col-span-2 xl:col-span-1">
+            AO API Base URL
+            <input
+              value={process.env.NEXT_PUBLIC_LOOPBOARD_AO_API_BASE_URL ?? "http://127.0.0.1:3000"}
+              readOnly
+              disabled
+              className="min-h-9 border border-slate-200 bg-slate-50 px-2 font-mono text-sm font-normal normal-case text-slate-500"
             />
           </label>
+          <p className="md:col-span-2 xl:col-span-3 text-xs leading-5 text-slate-500">
+            Limits how many AO worker sessions run at once. Unlimited spawns all issues
+            immediately (previous batch-spawn behavior). Workflow fan-out can override per node.
+          </p>
+          <p className="md:col-span-2 xl:col-span-3 text-xs leading-5 text-slate-500">
+            Agent monitoring, reviews, and terminals are integrated in this app. Configure the
+            internal AO API with <code className="font-mono">LOOPBOARD_AO_API_BASE_URL</code>.
+          </p>
         </div>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
@@ -2851,6 +2916,7 @@ function FeatureForm({
           <input
             value={form.artifactFolderPath}
             onChange={(event) => onChange("artifactFolderPath", event.target.value)}
+            placeholder='For repository root, enter "."'
             className="min-h-9 border border-slate-300 bg-white px-2 font-mono text-sm font-normal normal-case text-slate-950"
           />
         </label>
@@ -3581,14 +3647,21 @@ export default function Home() {
   const sensors = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor));
 
   // Tab navigation state
-  type ActiveTab = "overview" | "board" | "features" | "workflows" | "settings";
+  type ActiveTab = "overview" | "board" | "agents" | "reviews" | "features" | "workflows" | "settings";
   const [activeTab, setActiveTab] = useState<ActiveTab>("overview");
+  const [aoSyncing, setAoSyncing] = useState(false);
+  const [aoTerminalSessionId, setAoTerminalSessionId] = useState<string | null>(null);
+  const [isQuittingManagedRuntime, setIsQuittingManagedRuntime] = useState(false);
+  const [quitManagedRuntimeError, setQuitManagedRuntimeError] = useState("");
+  const [aoStandaloneSession, setAoStandaloneSession] = useState<AoDashboardSession | null>(null);
+  const [aoMuxUrl, setAoMuxUrl] = useState("ws://127.0.0.1:31101/mux");
+  const [aoHealthMessage, setAoHealthMessage] = useState("");
 
   // URL sync: read ?tab= on mount
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get("tab") as ActiveTab | null;
-    if (tab && ["overview", "board", "features", "workflows", "settings"].includes(tab)) {
+    if (tab && ["overview", "board", "agents", "reviews", "features", "workflows", "settings"].includes(tab)) {
       setActiveTab(tab);
     }
   }, []);
@@ -3630,9 +3703,37 @@ export default function Home() {
     () => applyBoardQuickFilter(boardSourceTasks, boardQuickFilter),
     [boardQuickFilter, boardSourceTasks],
   );
+  const activeAoWorkerPool = useMemo(() => {
+    if (!selectedFeature?.id) {
+      return undefined;
+    }
+
+    for (const job of engineStatus?.recentJobs ?? []) {
+      if (job.status !== "running" && job.status !== "queued") {
+        continue;
+      }
+
+      if (job.aoWorkerPool?.featureId === selectedFeature.id) {
+        return job.aoWorkerPool;
+      }
+    }
+
+    return undefined;
+  }, [engineStatus?.recentJobs, selectedFeature?.id]);
+  const poolTaskIds = useMemo(() => {
+    if (!activeAoWorkerPool) {
+      return new Set<string>();
+    }
+
+    return new Set(
+      activeAoWorkerPool.items
+        .map((item) => item.taskId)
+        .filter((taskId): taskId is string => typeof taskId === "string" && taskId.length > 0),
+    );
+  }, [activeAoWorkerPool]);
   const groupedTasks = useMemo(
-    () => tasksByStatus(filteredVisibleTasks),
-    [filteredVisibleTasks],
+    () => tasksByStatusWithPoolOverlay(filteredVisibleTasks, activeAoWorkerPool),
+    [filteredVisibleTasks, activeAoWorkerPool],
   );
   const counters = useMemo(() => workflowCounters(projectTasks), [projectTasks]);
   const projectStatusMetrics = useMemo(() => statusMetrics(projectTasks), [projectTasks]);
@@ -3816,6 +3917,74 @@ export default function Home() {
       }
     }
   }, []);
+
+  useEffect(() => {
+    void fetchAoBridgeHealth()
+      .then((health) => setAoHealthMessage(health.available ? "" : health.message))
+      .catch(() => setAoHealthMessage("Agent Orchestrator API is unavailable."));
+    void fetchAoBridgeTerminalConfig()
+      .then((config) => setAoMuxUrl(config.muxProxyUrl))
+      .catch(() => undefined);
+  }, []);
+
+  const handleSyncAoRuntime = useCallback(async () => {
+    if (!selectedProject) {
+      return;
+    }
+
+    setAoSyncing(true);
+    try {
+      await syncAoBridgeRuntime(selectedProject.id);
+      await loadBoard(selectedProject.id, { silent: true });
+    } catch (error) {
+      setLoadError(
+        error instanceof Error ? error.message : "Failed to sync AO runtime state.",
+      );
+    } finally {
+      setAoSyncing(false);
+    }
+  }, [loadBoard, selectedProject]);
+
+  const refreshAgentsBoard = useCallback(async () => {
+    if (selectedProject) {
+      await loadBoard(selectedProject.id, { silent: true });
+    }
+  }, [loadBoard, selectedProject?.id]);
+
+  const handleKillAoSession = useCallback(async (sessionId: string) => {
+    await killAoBridgeSession(sessionId);
+    setAoTerminalSessionId(null);
+    setAoStandaloneSession(null);
+    if (selectedProject) {
+      await loadBoard(selectedProject.id, { silent: true });
+    }
+  }, [loadBoard, selectedProject]);
+
+  const openAoSessionDrawer = useCallback(async (sessionId: string) => {
+    setActiveTab("agents");
+    setAoTerminalSessionId(sessionId);
+    try {
+      const session = await fetchAoBridgeSession(sessionId);
+      setAoStandaloneSession(session);
+    } catch {
+      setAoStandaloneSession({
+        id: sessionId,
+        projectId: selectedProject?.engineSettings.agentOrchestrator?.projectId ?? "",
+        status: "working",
+        activity: null,
+        attentionLevel: "working",
+        branch: null,
+        issueId: null,
+        issueUrl: null,
+        issueTitle: null,
+        displayName: sessionId,
+        summary: null,
+        createdAt: new Date().toISOString(),
+        lastActivityAt: new Date().toISOString(),
+        pr: null,
+      });
+    }
+  }, [selectedProject?.engineSettings.agentOrchestrator?.projectId]);
 
   const loadTaskContextStatus = useCallback(async (taskId: string) => {
     setContextError("");
@@ -4456,7 +4625,11 @@ export default function Home() {
         window.localStorage.setItem(SELECTED_FEATURE_STORAGE_KEY, savedFeature.id);
         setFeatureMutationMessage(
           featureMode === "create"
-            ? "Feature created and artifacts detected."
+            ? Object.values(savedFeature.artifacts).some(
+                (artifact) => artifact.exists,
+              )
+              ? "Feature created and artifacts linked."
+              : "Feature created. Set Artifact Folder to link PRD and Spec Kit files."
             : "Feature updated and artifacts refreshed.",
         );
         await loadBoard(selectedProject.id);
@@ -4759,6 +4932,7 @@ export default function Home() {
       !task ||
       !toStatus ||
       task.status === toStatus ||
+      poolTaskIds.has(taskId) ||
       !KANBAN_COLUMNS.some((column) => column.id === toStatus)
     ) {
       return;
@@ -5143,10 +5317,34 @@ export default function Home() {
     window.localStorage.setItem(BOARD_QUICK_FILTER_STORAGE_KEY, filter);
   }
 
+  async function quitManagedRuntime() {
+    if (
+      !window.confirm(
+        "Shut down Loop? This stops Loop Control Plane, Agent Orchestrator, and any running agent sessions.",
+      )
+    ) {
+      return;
+    }
+
+    setIsQuittingManagedRuntime(true);
+    setQuitManagedRuntimeError("");
+
+    try {
+      await requestManagedShutdown();
+    } catch (error) {
+      setIsQuittingManagedRuntime(false);
+      setQuitManagedRuntimeError(
+        error instanceof LoopBoardApiError
+          ? error.message
+          : "Loop Control Plane could not shut down the managed runtime.",
+      );
+    }
+  }
+
   return (
     <div style={{ minHeight: "100vh", background: "#f0ede3" }}>
       {/* ===== APP BAR ===== */}
-      <header style={{ borderBottom: "2px solid #23221f", background: "#fcfbf8" }}>
+      <header className="z-30 border-b-2 border-[#23221f] bg-[#fcfbf8]">
         <div style={{ maxWidth: 1400, margin: "0 auto", padding: "12px 24px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           {/* Logo */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
@@ -5267,7 +5465,7 @@ export default function Home() {
 
         {/* Tab Strip */}
         <div style={{ maxWidth: 1400, margin: "0 auto", padding: "10px 24px", display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {(["overview", "board", "features", "workflows", "settings"] as ActiveTab[]).map((tab) => (
+          {(["overview", "board", "agents", "reviews", "features", "workflows", "settings"] as ActiveTab[]).map((tab) => (
             <button
               key={tab}
               type="button"
@@ -5293,7 +5491,16 @@ export default function Home() {
         </div>
       </header>
 
-      <main style={{ maxWidth: 1400, margin: "0 auto", padding: "24px 24px 48px" }}>
+      <main
+        style={{
+          maxWidth: 1400,
+          margin: "0 auto",
+          padding: activeTab === "board" ? "24px 24px 0" : "24px 24px 48px",
+          ...(activeTab === "board"
+            ? { height: "calc(100dvh - 8.75rem)", overflow: "hidden", display: "flex", flexDirection: "column" }
+            : {}),
+        }}
+      >
         {/* Status messages */}
         {projectMutationError ? (
           <div style={{ marginBottom: 16, border: "2px solid #d08a7f", background: "#fbeae6", borderRadius: "12px 10px 13px 11px", padding: "10px 14px", color: "#b14b3c", fontSize: 14 }}>
@@ -5303,6 +5510,11 @@ export default function Home() {
         {projectMutationMessage ? (
           <div style={{ marginBottom: 16, border: "2px solid #86a87d", background: "#eef5ea", borderRadius: "12px 10px 13px 11px", padding: "10px 14px", color: "#4a7340", fontSize: 14 }}>
             {projectMutationMessage}
+          </div>
+        ) : null}
+        {quitManagedRuntimeError ? (
+          <div style={{ marginBottom: 16, border: "2px solid #d08a7f", background: "#fbeae6", borderRadius: "12px 10px 13px 11px", padding: "10px 14px", color: "#b14b3c", fontSize: 14 }}>
+            {quitManagedRuntimeError}
           </div>
         ) : null}
 
@@ -5316,6 +5528,11 @@ export default function Home() {
               {selectedProject?.name ?? "No project selected"}{" "}
               {selectedProject ? "· " + (selectedProject.repoPath || "no path") : ""}
             </p>
+            {aoHealthMessage ? (
+              <p style={{ marginBottom: 24, border: "2px solid #d9b26d", background: "#fff7e8", borderRadius: 12, padding: "10px 14px", color: "#8a5a12", fontSize: 14 }}>
+                {aoHealthMessage}
+              </p>
+            ) : null}
 
             {/* Counter tiles */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 14, marginBottom: 32 }}>
@@ -5471,8 +5688,15 @@ export default function Home() {
 
         {/* ===== BOARD TAB ===== */}
         {activeTab === "board" && (
-          <div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, gap: 12, flexWrap: "wrap" }}>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              flex: 1,
+              minHeight: 0,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, gap: 12, flexWrap: "wrap", flexShrink: 0 }}>
               <div>
                 <h1 style={{ fontFamily: "var(--font-caveat)", fontSize: 38, fontWeight: 700, color: "#23221f", marginBottom: 2 }}>
                   Task Board
@@ -5504,7 +5728,7 @@ export default function Home() {
             </div>
 
             {/* Filter chips */}
-            <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", flexShrink: 0 }}>
               {(["all", "ai-running", "human-working", "needs-review", "blocked", "ci-failed"] as BoardQuickFilter[]).map((filter) => (
                 <button
                   key={filter}
@@ -5530,17 +5754,32 @@ export default function Home() {
             </div>
 
             {mutationError ? (
-              <div style={{ marginBottom: 12, border: "2px solid #d08a7f", background: "#fbeae6", borderRadius: "10px 8px 11px 9px", padding: "10px 14px", color: "#b14b3c", fontSize: 14 }}>
+              <div style={{ marginBottom: 12, border: "2px solid #d08a7f", background: "#fbeae6", borderRadius: "10px 8px 11px 9px", padding: "10px 14px", color: "#b14b3c", fontSize: 14, flexShrink: 0 }}>
                 {mutationError}
               </div>
             ) : null}
 
             {/* Board + task detail */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16, alignItems: "start" }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "minmax(0, 1fr) 300px",
+                gap: 16,
+                flex: 1,
+                minHeight: 0,
+                alignItems: "stretch",
+              }}
+            >
               {/* Kanban */}
-              <div className="sketch-card" style={{ padding: 0, overflow: "hidden" }}>
+              <div
+                className="sketch-card"
+                style={{ padding: 0, overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column" }}
+              >
                 <DndContext id="loopboard-kanban" sensors={sensors} onDragEnd={handleDragEnd}>
-                  <div className="min-w-0 overflow-x-auto" data-board-scroll>
+                  <div
+                    className="min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto"
+                    data-board-scroll
+                  >
                     {loadError ? (
                       <BoardMessage
                         title="Persisted board could not load"
@@ -5592,6 +5831,8 @@ export default function Home() {
                             featuresById={featuresById}
                             selectedTaskId={selectedTask?.id ?? ""}
                             taskRunJobsByTaskId={taskRunJobsByTaskId}
+                            activeAoWorkerPool={activeAoWorkerPool}
+                            poolTaskIds={poolTaskIds}
                             onSelectTask={selectTask}
                           />
                         ))}
@@ -5602,7 +5843,15 @@ export default function Home() {
               </div>
 
               {/* Task detail panel */}
-              <aside className="sketch-card-b" style={{ padding: 16, position: "sticky", top: 16, maxHeight: "calc(100vh - 2rem)", overflowY: "auto" }}>
+              <aside
+                className="sketch-card-b"
+                style={{
+                  padding: 16,
+                  minHeight: 0,
+                  overflowY: "auto",
+                  overflowX: "hidden",
+                }}
+              >
                 {contextError ? (
                   <div style={{ marginBottom: 12, border: "2px solid #d08a7f", background: "#fbeae6", borderRadius: "8px 6px 9px 7px", padding: "8px 12px", color: "#b14b3c", fontSize: 13 }}>
                     {contextError}
@@ -5766,6 +6015,25 @@ export default function Home() {
                         </div>
                       </section>
                     ) : null}
+
+                    <div className="mt-5">
+                      <AoRuntimePanel
+                        task={selectedTask}
+                        isSyncing={aoSyncing}
+                        onSync={() => void handleSyncAoRuntime()}
+                        onKill={
+                          selectedTask.aoRuntime?.sessionId
+                            ? () =>
+                                void handleKillAoSession(selectedTask.aoRuntime!.sessionId!)
+                            : undefined
+                        }
+                        onOpenTerminal={
+                          selectedTask.aoRuntime?.sessionId
+                            ? () => setAoTerminalSessionId(selectedTask.aoRuntime!.sessionId!)
+                            : undefined
+                        }
+                      />
+                    </div>
 
                     <section className="mt-5">
                       <h3 className="text-xs font-semibold uppercase text-slate-500">GitHub Delivery</h3>
@@ -6067,6 +6335,30 @@ export default function Home() {
           </div>
         )}
 
+        {activeTab === "agents" && (
+          <div>
+            <h1 style={{ fontFamily: "var(--font-caveat)", fontSize: 48, fontWeight: 700, color: "#23221f", marginBottom: 6 }}>
+              Agents
+            </h1>
+            <AoAgentsTab
+              project={selectedProject}
+              tasks={projectTasks}
+              activeAoWorkerPool={activeAoWorkerPool}
+              onOpenBoard={() => setActiveTab("board")}
+              onBoardRefresh={refreshAgentsBoard}
+            />
+          </div>
+        )}
+
+        {activeTab === "reviews" && (
+          <div>
+            <h1 style={{ fontFamily: "var(--font-caveat)", fontSize: 48, fontWeight: 700, color: "#23221f", marginBottom: 6 }}>
+              Reviews
+            </h1>
+            <AoReviewsTab project={selectedProject} />
+          </div>
+        )}
+
         {/* ===== FEATURES TAB ===== */}
         {activeTab === "features" && (
           <div>
@@ -6227,6 +6519,9 @@ export default function Home() {
                 onWorkflowResumed={() => {
                   void loadBoard(selectedProject?.id);
                 }}
+                onOpenAoSession={(sessionId) => {
+                  void openAoSessionDrawer(sessionId);
+                }}
               />
               <div className="sketch-card-b" style={{ padding: 16 }}>
                 <p style={{ fontFamily: "var(--font-caveat)", fontSize: 20, fontWeight: 700, color: "#23221f", marginBottom: 12 }}>
@@ -6293,6 +6588,42 @@ export default function Home() {
               </div>
             </div>
 
+            {managedRuntimeEnabled ? (
+              <div className="sketch-card" style={{ padding: 16, marginBottom: 20 }}>
+                <p style={{ fontFamily: "var(--font-caveat)", fontSize: 20, fontWeight: 700, color: "#23221f", marginBottom: 8 }}>
+                  Local Runtime
+                </p>
+                <p style={{ fontSize: 14, color: "#6f6d67", lineHeight: 1.6, marginBottom: 14, maxWidth: 640 }}>
+                  You are running Loop through the managed local stack ({`npm run dev:managed`}).
+                  Shut down stops Loop Control Plane, the Agent Orchestrator API, mux proxy, and any
+                  active agent sessions. Restart from your terminal when you need Loop again.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void quitManagedRuntime()}
+                  disabled={isQuittingManagedRuntime}
+                  data-testid="managed-runtime-quit"
+                  className="sketch-pill"
+                  style={{
+                    border: "2px solid #23221f",
+                    padding: "6px 16px",
+                    fontSize: 13,
+                    background: isQuittingManagedRuntime ? "#f0ede3" : "#23221f",
+                    color: isQuittingManagedRuntime ? "#6f6d67" : "#f6f3ec",
+                    cursor: isQuittingManagedRuntime ? "wait" : "pointer",
+                    fontFamily: "var(--font-hand)",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    opacity: isQuittingManagedRuntime ? 0.8 : 1,
+                  }}
+                >
+                  <Power style={{ width: 14, height: 14 }} />
+                  {isQuittingManagedRuntime ? "Shutting down..." : "Shut down Loop"}
+                </button>
+              </div>
+            ) : null}
+
             {/* Backend availability + Project Health */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
               <div className="sketch-card-b" style={{ padding: 16 }}>
@@ -6343,6 +6674,66 @@ export default function Home() {
           </div>
         )}
       </main>
+
+      {aoTerminalSessionId ? (
+        <AoMuxProvider muxUrl={aoMuxUrl}>
+          <SessionDetailDrawer
+            session={
+              aoStandaloneSession ??
+              (selectedTask?.aoRuntime?.sessionId === aoTerminalSessionId
+                ? {
+                    id: aoTerminalSessionId,
+                    projectId: selectedProject?.engineSettings.agentOrchestrator?.projectId ?? "",
+                    status: selectedTask.aoRuntime?.sessionStatus ?? "working",
+                    activity: null,
+                    attentionLevel: "working",
+                    branch: selectedTask.branch || null,
+                    issueId: selectedTask.github.issueNumber
+                      ? String(selectedTask.github.issueNumber)
+                      : null,
+                    issueUrl: selectedTask.github.issueUrl ?? null,
+                    issueTitle: selectedTask.title,
+                    displayName: selectedTask.title,
+                    summary: selectedTask.description,
+                    createdAt: selectedTask.createdAt,
+                    lastActivityAt: selectedTask.aoRuntime?.lastSyncedAt ?? selectedTask.updatedAt,
+                    pr: selectedTask.aoRuntime?.prUrl
+                      ? {
+                          number: selectedTask.github.pullRequestNumber ?? null,
+                          url: selectedTask.aoRuntime.prUrl,
+                          state: null,
+                          reviewDecision: selectedTask.github.reviewStatus ?? null,
+                          mergeability: null,
+                          ciStatus: selectedTask.github.ciStatus ?? null,
+                        }
+                      : null,
+                  }
+                : {
+                    id: aoTerminalSessionId,
+                    projectId: selectedProject?.engineSettings.agentOrchestrator?.projectId ?? "",
+                    status: "working",
+                    activity: null,
+                    attentionLevel: "working",
+                    branch: null,
+                    issueId: null,
+                    issueUrl: null,
+                    issueTitle: null,
+                    displayName: aoTerminalSessionId,
+                    summary: null,
+                    createdAt: new Date().toISOString(),
+                    lastActivityAt: new Date().toISOString(),
+                    pr: null,
+                  })
+            }
+            projectId={selectedProject?.engineSettings.agentOrchestrator?.projectId}
+            onClose={() => {
+              setAoTerminalSessionId(null);
+              setAoStandaloneSession(null);
+            }}
+            onKill={() => void handleKillAoSession(aoTerminalSessionId)}
+          />
+        </AoMuxProvider>
+      ) : null}
 
       {/* ===== OVERLAY FORMS ===== */}
       {projectMode !== "idle" ? (

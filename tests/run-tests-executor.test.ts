@@ -69,7 +69,7 @@ describe("run-tests-executor", () => {
     }
   });
 
-  it("returns structured failure when tests fail", async () => {
+  it("routes normal test failures back to manual editing", async () => {
     const repoPath = mkdtempSync(join(tmpdir(), "loopboard-run-tests-fail-"));
 
     try {
@@ -92,12 +92,35 @@ describe("run-tests-executor", () => {
         }),
       });
 
-      assert.equal(result.success, false);
-      assert.equal(result.errorCode, "run_tests_failed");
+      assert.equal(result.success, true);
+      assert.equal(result.branchLabel, "failed");
       assert.equal(result.result?.passed, false);
       assert.ok(result.outputArtifacts?.[0]?.description?.startsWith(externalUntrustedPrefix));
     } finally {
       rmSync(repoPath, { recursive: true, force: true });
     }
+  });
+
+  it("keeps timeouts as workflow failures", async () => {
+    const result = await executeRunTests({
+      projectRepoPath: process.cwd(),
+      workflowRunId: "run-tests-timeout",
+      inputArtifacts: [],
+      outputArtifacts: [
+        {
+          name: "test-report",
+          path: "loopboard://runs/{run}/test-report",
+          required: true,
+        },
+      ],
+      processRunner: createMockProcessRunner({
+        success: false,
+        exitCode: null,
+        timedOut: true,
+      }),
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.errorCode, "run_tests_timeout");
   });
 });

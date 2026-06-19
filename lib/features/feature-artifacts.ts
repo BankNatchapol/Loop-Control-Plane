@@ -35,7 +35,14 @@ export const discoverFeatureArtifacts = ({
   artifactFolderPath = "",
   status = "prd-draft",
 }: FeatureArtifactDiscoveryInput): FeatureArtifactDiscoveryResult => {
-  const folderPath = artifactFolderPath.trim();
+  const repoRoot = resolve(project.repoPath);
+  const requestedFolderPath = artifactFolderPath.trim();
+  const rootContainsArtifacts = artifactNames.some((name) => {
+    const path = join(repoRoot, FEATURE_ARTIFACT_FILES[name]);
+    return existsSync(path) && statSync(path).isFile();
+  });
+  const folderPath =
+    requestedFolderPath || (rootContainsArtifacts ? "." : "");
 
   if (!folderPath) {
     const artifacts = artifactsForStatus(emptyFeatureArtifacts(), status);
@@ -51,7 +58,6 @@ export const discoverFeatureArtifacts = ({
     };
   }
 
-  const repoRoot = resolve(project.repoPath);
   const specsRoot = resolve(repoRoot, project.specKitRoot || project.specsPath || ".");
   const absoluteFolder = resolvePath(repoRoot, folderPath);
 
@@ -192,6 +198,9 @@ const isInside = (targetPath: string, rootPath: string): boolean => {
 
 const toStoredPath = (repoRoot: string, absolutePath: string): string => {
   const relativePath = relative(repoRoot, absolutePath);
+  if (relativePath === "") {
+    return ".";
+  }
   return !relativePath.startsWith("..") && !isAbsolute(relativePath)
     ? relativePath
     : absolutePath;

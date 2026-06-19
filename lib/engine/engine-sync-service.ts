@@ -1,4 +1,5 @@
 import { TaskContextService } from "@/lib/context/task-context-service";
+import { syncProjectAoRuntime } from "@/lib/ao-bridge/ao-task-linker";
 import type { LoopBoardRepository } from "@/lib/db/loopboard-repository";
 import type {
   BackendAdapter,
@@ -475,9 +476,15 @@ export const syncInFlightEngineJobs = async (
     .listEngineJobs({ status: "running" })
     .filter(isEngineJobAwaitingExternalSync);
 
+  const aoProjectsToSync = new Set<string>();
+
   for (const job of runningJobs) {
     if (!isExternalExecutorBackend(job.backend)) {
       continue;
+    }
+
+    if (job.backend === "agent-orchestrator" && job.projectId) {
+      aoProjectsToSync.add(job.projectId);
     }
 
     result.examined += 1;
@@ -567,6 +574,23 @@ export const syncInFlightEngineJobs = async (
     result.completed += reconciled.completed;
     result.failed += reconciled.failed;
     result.prSynced += reconciled.prSynced;
+  }
+
+  for (const projectId of aoProjectsToSync) {
+    const project = repository.getProject(projectId);
+    if (!project.engineSettings.agentOrchestrator?.enabled) {
+      continue;
+    }
+
+    try {
+      await syncProjectAoRuntime(
+        repository,
+        projectId,
+        project.engineSettings.agentOrchestrator.projectId,
+      );
+    } catch {
+      // AO daemon may be offline; task overlay sync is best-effort.
+    }
   }
 
   return result;

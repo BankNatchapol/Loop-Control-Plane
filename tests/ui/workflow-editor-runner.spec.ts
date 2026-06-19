@@ -1,12 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const nodeLocator = (page: Page, label: string) =>
-  page.locator(".react-flow__node").filter({ hasText: label }).first();
-
 const runAction = async (
   page: Page,
   testId: string,
-  action: "run-next" | "approve",
+  action: "run-next" | "approve" | "skip",
 ) => {
   const response = page.waitForResponse((candidate) => {
     const request = candidate.request();
@@ -32,20 +29,21 @@ test("creates, connects, saves, runs, approves, and completes a workflow", async
   page,
 }) => {
   await page.goto("/");
+  await page
+    .getByRole("banner")
+    .getByRole("button", { name: "workflows", exact: true })
+    .click();
 
   const editor = page.getByTestId("workflow-editor");
   await expect(editor).toBeVisible();
   await expect(
     editor.getByRole("heading", { name: "Feature Development Loop" }),
   ).toBeVisible();
-  await expect(editor.getByText("11 nodes · 11 edges")).toBeVisible();
+  await expect(editor.getByText("12 nodes · 14 edges")).toBeVisible();
 
   await page.getByTestId("workflow-new").click();
   await expect(editor.getByText("2 nodes · 1 edges")).toBeVisible();
   await page.getByLabel("Workflow name").fill("Playwright Workflow");
-
-  await nodeLocator(page, "Spec Kit Actions").click();
-  await page.getByLabel("Mode").selectOption({ label: "disabled" });
 
   const saveResponse = page.waitForResponse(
     (response) =>
@@ -84,7 +82,7 @@ test("creates, connects, saves, runs, approves, and completes a workflow", async
     "Spec Kit Actions",
   );
 
-  await runAction(page, "workflow-run-next", "run-next");
+  await runAction(page, "workflow-skip", "skip");
   await expect(page.getByTestId("workflow-message")).toContainText(
     "Workflow run completed.",
   );

@@ -10,6 +10,7 @@ export type EngineJobKind = "demo-ping" | "task-run" | "workflow-step";
 export type EngineJobStatus =
   | "queued"
   | "running"
+  | "interrupted"
   | "completed"
   | "failed"
   | "cancelled";
@@ -45,6 +46,10 @@ export type ExecutorConfig = {
   aoProjectId?: string;
   /** Optional model id for Cursor / Claude / Codex backends. */
   model?: string;
+  /** Agent plugin override passed to `ao spawn --agent` (e.g. "claude-code", "codex", "cursor"). */
+  aoAgentPlugin?: string;
+  /** Per-agent model map written to agent-orchestrator.yaml before spawn, keyed by plugin name. */
+  aoAgentModels?: Record<string, string>;
 };
 
 export type WorkflowNodeExecutorConfig = Pick<
@@ -61,6 +66,8 @@ export type WorkflowNodeExecutorConfig = Pick<
   | "fanOut"
   | "aoProjectId"
   | "model"
+  | "aoAgentPlugin"
+  | "aoAgentModels"
 >;
 
 export type EngineRunLogLevel = "info" | "warn" | "error";
@@ -377,6 +384,18 @@ export const validateExecutorConfig = (
       ...(typeof value.branch === "string" ? { branch: value.branch } : {}),
       ...(typeof value.aoProjectId === "string" ? { aoProjectId: value.aoProjectId } : {}),
       ...(typeof value.model === "string" ? { model: value.model } : {}),
+      ...(typeof value.aoAgentPlugin === "string" && value.aoAgentPlugin.trim().length > 0
+        ? { aoAgentPlugin: value.aoAgentPlugin.trim() }
+        : {}),
+      ...(value.aoAgentModels && typeof value.aoAgentModels === "object" && !Array.isArray(value.aoAgentModels)
+        ? {
+            aoAgentModels: Object.fromEntries(
+              Object.entries(value.aoAgentModels as Record<string, unknown>)
+                .filter(([, v]) => typeof v === "string" && (v as string).trim().length > 0)
+                .map(([k, v]) => [k, (v as string).trim()]),
+            ),
+          }
+        : {}),
       ...(isRecord(value.fanOut) &&
       typeof value.fanOut.maxConcurrency === "number" &&
       Array.isArray(value.fanOut.issueIds)

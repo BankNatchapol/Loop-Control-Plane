@@ -176,6 +176,86 @@ describe("create-github-issues-executor", () => {
     });
   });
 
+  it("keeps partial issue creation incomplete and resumes only missing tasks", async () => {
+    await withGitHubIssueFixture(async ({ repository, featureId, projectId }) => {
+      repository.createTask({
+        id: "task-checkout-api",
+        projectId,
+        featureId,
+        title: "Polish confirmation copy",
+        description: "Improve the button label.",
+        status: "ready",
+        owner: "ai",
+        mode: "execute",
+        risk: "low",
+        source: "manual",
+      });
+      const outputArtifacts: WorkflowArtifact[] = [
+        {
+          name: "github-issues",
+          path: "https://github.com/{repository}/issues",
+          required: true,
+        },
+      ];
+      let calls = 0;
+      const partial = await executeCreateGitHubIssues({
+        repository,
+        featureId,
+        workflowRunId: "partial-run",
+        outputArtifacts,
+        token: "token",
+        automationSettings: {
+          ...defaultAutomationSettings,
+          globalAutoRunEnabled: true,
+        },
+        createIssue: async ({ title }) => {
+          calls += 1;
+          if (calls === 2) throw new Error("temporary GitHub failure");
+          return {
+            status: "created",
+            repository: "bank-p/loop-control-plane",
+            message: `Created ${title}`,
+            issueNumber: 41,
+            issueUrl: "https://github.com/bank-p/loop-control-plane/issues/41",
+            labels: [],
+            createdAt: "2026-06-16T00:00:00.000Z",
+          };
+        },
+      });
+      assert.equal(partial.success, false);
+      assert.equal(partial.result?.createdCount, 1);
+      assert.equal(
+        Number(partial.result?.failedCount) +
+          Number(partial.result?.policyBlockedCount),
+        1,
+      );
+
+      const resumed = await executeCreateGitHubIssues({
+        repository,
+        featureId,
+        workflowRunId: "partial-run",
+        outputArtifacts,
+        token: "token",
+        automationSettings: {
+          ...defaultAutomationSettings,
+          globalAutoRunEnabled: true,
+        },
+        createIssue: async () => ({
+          status: "created",
+          repository: "bank-p/loop-control-plane",
+          message: "Created remaining issue",
+          issueNumber: 42,
+          issueUrl: "https://github.com/bank-p/loop-control-plane/issues/42",
+          labels: [],
+          createdAt: "2026-06-16T00:01:00.000Z",
+        }),
+      });
+      assert.equal(resumed.success, true);
+      assert.equal(resumed.result?.createdCount, 1);
+      assert.equal(resumed.result?.skippedExistingCount, 1);
+    });
+  });
+
   it("fails when automation policy blocks low-risk auto issue creation", async () => {
     await withGitHubIssueFixture(async ({ repository, featureId, projectId }) => {
       const project = repository.getProject(projectId);

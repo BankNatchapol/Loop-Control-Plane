@@ -29,6 +29,12 @@ describe("Loop Control Plane SQLite setup", () => {
         "0007_automation_policy_settings.sql",
         "0008_loop_engine.sql",
         "0009_project_engine_settings.sql",
+        "0010_workflow_edge_dashed.sql",
+        "0011_task_ao_runtime.sql",
+        "0012_workflow_edge_handles.sql",
+        "0013_workflow_edge_dashed_backfill.sql",
+        "0014_final_human_pr_agent_workflow.sql",
+        "0015_durable_workflow_recovery.sql",
       ]);
       assert.equal(
         database.prepare("SELECT COUNT(*) AS count FROM projects").get()

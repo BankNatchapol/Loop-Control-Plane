@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import {
@@ -142,6 +145,27 @@ describe("CLI availability probes", () => {
     assert.equal(result.available, false);
     assert.equal(result.backend, "codex");
     assert.match(result.message, /missing/i);
+  });
+
+  it("recognizes the standalone cursor-agent binary", () => {
+    const binPath = mkdtempSync(join(tmpdir(), "loopboard-cursor-agent-bin-"));
+
+    try {
+      writeFileSync(
+        join(binPath, "cursor-agent"),
+        "#!/bin/sh\nprintf 'cursor-agent test-version\\n'\n",
+        "utf8",
+      );
+      chmodSync(join(binPath, "cursor-agent"), 0o755);
+
+      const result = probeCliAvailabilityForBackend("cursor", { PATH: binPath });
+
+      assert.equal(result.available, true);
+      assert.equal(result.backend, "cursor");
+      assert.match(result.message, /cursor-agent available/u);
+    } finally {
+      rmSync(binPath, { recursive: true, force: true });
+    }
   });
 
   it("probes registered backends without throwing", () => {

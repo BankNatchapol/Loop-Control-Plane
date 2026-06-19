@@ -138,6 +138,24 @@ describe("Executor registry", () => {
     assert.ok(result.logs.length >= 2);
   });
 
+  it("routes jobs by their persisted backend instead of payload configuration", async () => {
+    const registry = new ExecutorRegistry([defaultStubExecutor]);
+    const result = await registry.executeJob(
+      sampleJob({
+        backend: "stub",
+        payload: {
+          executor: {
+            backend: "cursor",
+          },
+        },
+      }),
+      { backend: "cursor" },
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.result?.completedDeterministically, true);
+  });
+
   it("parses payload executor config when present", () => {
     const config = resolveExecutorConfigForJob(
       sampleJob({

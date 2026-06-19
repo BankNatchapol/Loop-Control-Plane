@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -49,6 +49,7 @@ describe("process-runner", () => {
     assert.equal(isAllowedProcessCommand("git"), true);
     assert.equal(isAllowedProcessCommand("npm"), true);
     assert.equal(isAllowedProcessCommand("gh"), true);
+    assert.equal(isAllowedProcessCommand("cursor-agent"), true);
     assert.equal(isAllowedProcessCommand("spec-kit"), true);
     assert.equal(isAllowedProcessCommand("bash"), false);
     assert.equal(isAllowedProcessCommand("sh"), false);
@@ -247,12 +248,21 @@ describe("process-runner", () => {
   it("runs cursor, claude, and codex profiles through the audited spawner", async () => {
     const repoPath = mkdtempSync(join(tmpdir(), "loopboard-process-agent-"));
     const runner = new ProcessRunner(successSpawner("agent ok"));
+    const binPath = mkdtempSync(join(tmpdir(), "loopboard-process-bin-"));
+    const originalPath = process.env.PATH;
+    writeFileSync(
+      join(binPath, "cursor-agent"),
+      "#!/bin/sh\nprintf 'cursor-agent test-version\\n'\n",
+      "utf8",
+    );
+    chmodSync(join(binPath, "cursor-agent"), 0o755);
+    process.env.PATH = `${binPath}:${originalPath ?? ""}`;
 
     try {
       for (const profile of ["cursor", "claude", "codex"] as const) {
         const result = await runner.run({
           profile,
-          args: profile === "cursor" ? ["agent", "--version"] : ["--version"],
+          args: ["--version"],
           cwd: repoPath,
           projectRepoPath: repoPath,
         });
@@ -261,7 +271,9 @@ describe("process-runner", () => {
         assert.equal(result.profile, profile);
       }
     } finally {
+      process.env.PATH = originalPath;
       rmSync(repoPath, { recursive: true, force: true });
+      rmSync(binPath, { recursive: true, force: true });
     }
   });
 });

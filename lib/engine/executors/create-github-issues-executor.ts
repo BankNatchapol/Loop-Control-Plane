@@ -244,7 +244,7 @@ export const executeCreateGitHubIssues = async (
 
   const pendingCount = tasksNeedingIssues.length;
 
-  if (createdIssues.length === 0 && pendingCount > 0) {
+  if (policyBlocked.length > 0 || failedTasks.length > 0) {
     const errorCode =
       policyBlocked.length === pendingCount
         ? "create_github_issues_policy_blocked"
@@ -259,7 +259,7 @@ export const executeCreateGitHubIssues = async (
         policyBlocked.length === pendingCount
           ? "Project automation policy blocked automatic GitHub issue creation for all pending tasks."
           : failedTasks[0]?.message ??
-            "GitHub issue creation did not produce any linked issues.",
+            "Some feature tasks still do not have linked GitHub issues.",
       result: {
         featureId: input.featureId,
         createdCount: createdIssues.length,
@@ -269,8 +269,15 @@ export const executeCreateGitHubIssues = async (
         createdIssues,
         policyBlockedTaskIds: policyBlocked,
         failedTasks,
+        remainingTaskIds: [...policyBlocked, ...failedTasks.map((entry) => entry.taskId)],
       },
-      logs,
+      logs: [
+        ...logs,
+        logEntry("warn", "GitHub issue creation checkpoint is incomplete.", {
+          createdCount: createdIssues.length,
+          remainingCount: policyBlocked.length + failedTasks.length,
+        }),
+      ],
     };
   }
 

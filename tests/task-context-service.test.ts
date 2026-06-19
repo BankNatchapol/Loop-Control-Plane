@@ -404,7 +404,7 @@ describe("TaskContextService", () => {
       const missing = service.readHandoffDocument(task);
       assert.equal(missing.exists, false);
       assert.equal(missing.content, "");
-      assert.equal(missing.sections.generated.sourceOfTruth, "LoopBoard task state");
+      assert.equal(missing.sections.generated.sourceOfTruth, "Loop Control Plane task state");
 
       const saved = service.saveHandoffDocument(
         task,
@@ -573,7 +573,7 @@ describe("TaskContextService", () => {
       assert.ok(existsSync(result.paths.handoff));
       assert.match(result.prompt, /Manual Edit Intent/);
       assert.match(result.prompt, /Focus on prompt UX/u);
-      assert.match(result.prompt, /Generated LoopBoard Files/);
+      assert.match(result.prompt, /Generated Loop Control Plane Files/);
       assert.match(result.prompt, /Trusted Handoff/);
       assert.match(result.prompt, /Current Diff Guidance/);
       assert.match(result.prompt, /Linked GitHub Context/);

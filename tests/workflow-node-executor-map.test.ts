@@ -5,6 +5,7 @@ import {
   defaultExecutorConfigForNodeType,
   getWorkflowNodeExecutorMapping,
   isWorkflowApprovalGateNode,
+  workflowNodeEngineJobBackend,
   workflowNodeExecutorMap,
   workflowNodeTypesWithEngineExecutors,
 } from "@/lib/engine/workflow-node-executor-map";
@@ -31,7 +32,10 @@ describe("workflow node executor map", () => {
     ] as const) {
       assert.equal(isWorkflowApprovalGateNode(nodeType), true);
       assert.equal(workflowNodeExecutorMap[nodeType].approvalGate, true);
-      assert.equal(workflowNodeExecutorMap[nodeType].executorModule, null);
+      assert.equal(
+        workflowNodeExecutorMap[nodeType].executorModule,
+        nodeType === "merge" ? "lib/engine/executors/merge-executor.ts" : null,
+      );
     }
   });
 
@@ -41,6 +45,8 @@ describe("workflow node executor map", () => {
     assert.ok(engineNodes.includes("import-tasks"));
     assert.ok(engineNodes.includes("create-github-issues"));
     assert.ok(engineNodes.includes("run-tests"));
+    assert.ok(engineNodes.includes("pr-review-agent"));
+    assert.ok(engineNodes.includes("merge"));
     assert.ok(!engineNodes.includes("human-input"));
   });
 
@@ -107,5 +113,23 @@ describe("workflow node executor config", () => {
       backend: "agent-orchestrator",
       timeoutMs: 1_800_000,
     });
+  });
+
+  it("routes built-in workflow executors through the dispatcher backend", () => {
+    assert.equal(workflowNodeEngineJobBackend("import-tasks", "cursor"), "stub");
+    assert.equal(
+      workflowNodeEngineJobBackend("create-github-issues", "claude-code"),
+      "stub",
+    );
+    assert.equal(workflowNodeEngineJobBackend("pr-review-agent", "claude-code"), "stub");
+    assert.equal(workflowNodeEngineJobBackend("ai-review", "cursor"), "stub");
+    assert.equal(workflowNodeEngineJobBackend("spec-kit-actions", "cursor"), "cursor");
+    assert.equal(
+      workflowNodeEngineJobBackend(
+        "agent-orchestrator-implement",
+        "agent-orchestrator",
+      ),
+      "stub",
+    );
   });
 });

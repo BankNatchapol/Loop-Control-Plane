@@ -79,7 +79,7 @@ const augmentedPath = (existingPath: string | undefined): string => {
     "/nix/var/nix/profiles/default/bin",
   ];
   const parts = existingPath ? existingPath.split(":") : [];
-  const augmented = [...new Set([...extras, ...parts])];
+  const augmented = [...new Set([...parts, ...extras])];
   return augmented.join(":");
 };
 

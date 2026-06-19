@@ -89,7 +89,9 @@ const evaluateWorkflowStepOperatorPolicy = (
   }
 
   const run = repository.getWorkflowRun(job.workflowRunId);
-  const workflow = repository.getWorkflow(run.workflowId);
+  const workflow = run.workflowSnapshot?.nodes?.length
+    ? run.workflowSnapshot
+    : repository.getWorkflow(run.workflowId);
   const node = workflow.nodes.find((candidate) => candidate.id === job.workflowNodeId);
 
   if (!node) {
@@ -119,11 +121,11 @@ export const describeEngineJobOperatorActions = (
   repository: LoopBoardRepository,
   job: EngineJob,
 ): EngineJobOperatorActions => {
-  if (job.status !== "failed") {
+  if (job.status !== "failed" && job.status !== "interrupted") {
     return {
       retry: blockAction(
         "engine_job_not_retryable",
-        "Only failed engine jobs can be retried.",
+        "Only failed or interrupted engine jobs can be retried.",
       ),
       cancel: job.status === "queued" || job.status === "running"
         ? allowAction()
@@ -228,7 +230,9 @@ export const describeWorkflowRunEngineResume = (
     };
   }
 
-  const workflow = repository.getWorkflow(run.workflowId);
+  const workflow = run.workflowSnapshot?.nodes?.length
+    ? run.workflowSnapshot
+    : repository.getWorkflow(run.workflowId);
   const node = workflow.nodes.find((candidate) => candidate.id === run.currentNodeId);
 
   if (!node) {
@@ -251,7 +255,8 @@ export const describeWorkflowRunEngineResume = (
     };
   }
 
-  const operatorResumingFailedRun = run.status === "failed";
+  const operatorResumingFailedRun =
+    run.status === "failed" || run.status === "interrupted";
 
   const policy = evaluateWorkflowNodePolicy({
     node,
@@ -327,7 +332,9 @@ const releaseWorkflowStepLock = (
   }
 
   const run = repository.getWorkflowRun(job.workflowRunId);
-  const workflow = repository.getWorkflow(run.workflowId);
+  const workflow = run.workflowSnapshot?.nodes?.length
+    ? run.workflowSnapshot
+    : repository.getWorkflow(run.workflowId);
   const node = workflow.nodes.find((candidate) => candidate.id === job.workflowNodeId);
   const step = [...run.steps]
     .reverse()

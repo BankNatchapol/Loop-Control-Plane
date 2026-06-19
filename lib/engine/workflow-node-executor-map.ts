@@ -119,16 +119,17 @@ export const workflowNodeExecutorMap: Record<
   },
   "agent-orchestrator-implement": {
     nodeType: "agent-orchestrator-implement",
-    executorModule: "lib/engine/executors/agent-orchestrator-implement-executor.ts",
+    executorModule: "lib/engine/executors/ao-implement-executor.ts",
     defaultBackend: "agent-orchestrator",
     defaultExecutor: { timeoutMs: 1_800_000 },
     reuseDirectly: ["TaskContextService.generateTaskContext"],
     needsAdapter: [
       "Agent Orchestrator backend adapter (Phase 04)",
       "Branch naming and implementation artifact linkage",
+      "PR-Agent review of each task PR with findings sent back to its AO worker",
     ],
     approvalGate: false,
-    notes: "Delegates implementation work to the configured agent backend.",
+    notes: "Delegates implementation plus the task-level PR-Agent review/fix loop to AO workers.",
   },
   "run-tests": {
     nodeType: "run-tests",
@@ -159,7 +160,7 @@ export const workflowNodeExecutorMap: Record<
     ],
     approvalGate: false,
     notes:
-      "Invokes configured review backend; Phase 03 ships a stub summarizing diff and test report paths.",
+      "Runs whole-feature code analysis after task PRs have been integrated. PR-Agent belongs to the AO task loop.",
   },
   "open-pr": {
     nodeType: "open-pr",
@@ -179,13 +180,14 @@ export const workflowNodeExecutorMap: Record<
   },
   merge: {
     nodeType: "merge",
-    executorModule: null,
+    executorModule: "lib/engine/executors/merge-executor.ts",
     defaultBackend: "stub",
-    defaultExecutor: {},
+    defaultExecutor: { timeoutMs: 120_000 },
     reuseDirectly: [],
     needsAdapter: [],
     approvalGate: true,
-    notes: "Approval gate. Merge remains operator-controlled; no automated merge.",
+    notes:
+      "Human approval gate. Approval executes and verifies a squash merge, then deletes the feature branch.",
   },
   "pr-review-agent": {
     nodeType: "pr-review-agent",
@@ -199,7 +201,8 @@ export const workflowNodeExecutorMap: Record<
       "GitHub token for posting review comments",
     ],
     approvalGate: false,
-    notes: "Runs PR Agent to review an open PR and post review comments to GitHub. Backend selects which LLM pr-agent uses.",
+    notes:
+      "Runs the real PR-Agent against the final feature PR, publishes its review to GitHub, and routes approved vs needs changes.",
   },
   "manual-claude-code-edit": {
     nodeType: "manual-claude-code-edit",
@@ -231,6 +234,21 @@ export const defaultExecutorConfigForNodeType = (
     ...defaultExecutorConfig(mapping.defaultBackend),
     ...mapping.defaultExecutor,
   };
+};
+
+export const workflowNodeEngineJobBackend = (
+  nodeType: string,
+  configuredBackend: ExecutorBackend,
+): ExecutorBackend => {
+  if (nodeType === "spec-kit-actions") {
+    return configuredBackend;
+  }
+
+  // Built-in workflow nodes must enter through the workflow-step dispatcher.
+  // AO Implement still uses agent-orchestrator as its configured implementation
+  // backend, but the dispatcher first resolves the feature's linked issue set,
+  // checkpoints the worker pool, and runs feature integration.
+  return "stub";
 };
 
 export const workflowNodeTypesWithEngineExecutors = (): WorkflowEditorNodeType[] =>

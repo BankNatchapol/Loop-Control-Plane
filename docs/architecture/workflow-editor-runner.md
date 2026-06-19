@@ -77,11 +77,12 @@ Starting a run creates a `running` workflow run at the first node with no inboun
 - Start Run creates the run and records a run-start log.
 - Run Next Step evaluates the current node.
 - Approve Human Step completes a waiting approval step and advances to the next node.
-- Skip Disabled Step skips only disabled nodes.
+- Skip Node marks the current node skipped and advances to its next path. It can
+  also skip a node that is currently waiting for human approval.
 - Fail Step marks the current node and run as failed.
 - Resume restarts a paused run only after no current step is still waiting for approval.
 
-For auto nodes, the MVP runner records deterministic metadata logs, resolves output artifact placeholders such as `{run}` and `{feature}`, and advances to the next edge target. For human, semi-auto, or approval-required nodes, it records a waiting step and changes the run status to `paused`. For disabled nodes, it records a `skipped` step and advances.
+For auto nodes, the MVP runner records deterministic metadata logs, resolves output artifact placeholders such as `{run}` and `{feature}`, and advances to the next edge target. For human, semi-auto, or approval-required nodes, it records a waiting step and changes the run status to `paused`. Legacy saved workflows may still contain disabled nodes; the runner skips those automatically, but disabled is no longer offered as an editor mode.
 
 The current traversal uses the first outgoing edge from a node. Conditional edge labels document branch intent, but full condition evaluation is a future automation boundary.
 

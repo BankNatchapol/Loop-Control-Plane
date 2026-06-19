@@ -13,7 +13,6 @@ export type ResolvedAgentOrchestratorSettings = {
   enabled: boolean;
   configPath?: string;
   projectId?: string;
-  dashboardUrl?: string;
   pollIntervalMs: number;
 };
 
@@ -75,6 +74,32 @@ export const validateRepoRelativePath = (input: {
   return absolutePath;
 };
 
+export const DEFAULT_MAX_CONCURRENT_AO_WORKERS = 2;
+
+export const resolveMaxConcurrentWorkers = (
+  project: Project,
+  executorConfig?: ExecutorConfig,
+): number => {
+  if (
+    typeof executorConfig?.fanOut?.maxConcurrency === "number" &&
+    Number.isInteger(executorConfig.fanOut.maxConcurrency) &&
+    executorConfig.fanOut.maxConcurrency >= 0
+  ) {
+    return executorConfig.fanOut.maxConcurrency;
+  }
+
+  const projectLimit = project.engineSettings.agentOrchestrator?.maxConcurrentWorkers;
+  if (
+    typeof projectLimit === "number" &&
+    Number.isInteger(projectLimit) &&
+    projectLimit >= 0
+  ) {
+    return projectLimit;
+  }
+
+  return DEFAULT_MAX_CONCURRENT_AO_WORKERS;
+};
+
 export const resolveAgentOrchestratorSettings = (input: {
   project: Project;
   executorConfig: ExecutorConfig;
@@ -104,16 +129,10 @@ export const resolveAgentOrchestratorSettings = (input: {
     projectSettings.projectId?.trim() ||
     undefined;
 
-  const dashboardUrl =
-    typeof projectSettings.dashboardUrl === "string" && projectSettings.dashboardUrl.trim()
-      ? projectSettings.dashboardUrl.trim()
-      : undefined;
-
   return {
     enabled,
     ...(configPath ? { configPath } : {}),
     ...(projectId ? { projectId } : {}),
-    ...(dashboardUrl ? { dashboardUrl } : {}),
     pollIntervalMs,
   };
 };

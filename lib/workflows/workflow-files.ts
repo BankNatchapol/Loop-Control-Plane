@@ -204,7 +204,7 @@ const readWorkflowFilePayload = (
     }
 
     throw new WorkflowFileError(
-      `Workflow file "${storedPath}" was not found.`,
+      `Workflow file "${storedPath}" was not found at "${absolutePath}". Place the JSON file inside the project's configured workflows folder before importing it.`,
       404,
       "workflow_file_not_found",
     );

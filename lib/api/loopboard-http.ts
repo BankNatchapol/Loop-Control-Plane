@@ -4,6 +4,7 @@ import { applyMigrations, openLoopBoardDatabase } from "@/db/migrate";
 import {
   LoopBoardRepository,
   LoopBoardRepositoryError,
+  ResumableWorkflowRunError,
 } from "@/lib/db/loopboard-repository";
 import { TaskContextActionError } from "@/lib/api/task-context-actions";
 import { FeatureArtifactDocumentError } from "@/lib/features/feature-artifact-documents";
@@ -27,6 +28,10 @@ export type ApiFailure = {
   };
 };
 
+const startupRecoveryState = globalThis as typeof globalThis & {
+  __loopboardStartupRecoveryApplied?: boolean;
+};
+
 export const jsonOk = <T>(data: T, init?: ResponseInit) =>
   NextResponse.json<ApiSuccess<T>>({ ok: true, data }, init);
 
@@ -41,6 +46,16 @@ export const jsonError = (
   );
 
 export const handleApiError = (error: unknown) => {
+  if (error instanceof ResumableWorkflowRunError) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: { code: error.code, message: error.message },
+        existingRunId: error.existingRunId,
+      },
+      { status: error.statusCode },
+    );
+  }
   if (error instanceof LoopBoardRepositoryError) {
     return jsonError(error.message, error.statusCode, error.code);
   }
@@ -94,6 +109,10 @@ export const withLoopBoardRepository = async <T>(
   const database = openLoopBoardDatabase();
   applyMigrations(database);
   const repository = new LoopBoardRepository(database);
+  if (!startupRecoveryState.__loopboardStartupRecoveryApplied) {
+    repository.interruptOrphanedExecutions();
+    startupRecoveryState.__loopboardStartupRecoveryApplied = true;
+  }
 
   try {
     return await operation(repository);

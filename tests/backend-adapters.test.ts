@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -54,34 +54,41 @@ describe("CLI backend adapters", () => {
   it("returns backend_unavailable when CLI probe fails", async () => {
     const adapter = createCodexBackendAdapter({
       processRunner: new ProcessRunner(successSpawner()),
+      availabilityCheck: async () => ({
+        backend: "codex",
+        available: false,
+        message: "codex unavailable (mocked).",
+      }),
     });
 
-    const originalProbe = process.env.PATH;
-    process.env.PATH = "";
+    const result = await adapter.execute(
+      buildBackendExecutionContext({
+        job: { ...sampleJob(), backend: "codex" },
+        config: { backend: "codex" },
+        projectRepoPath: process.cwd(),
+      }),
+    );
 
-    try {
-      const result = await adapter.execute(
-        buildBackendExecutionContext({
-          job: { ...sampleJob(), backend: "codex" },
-          config: { backend: "codex" },
-          projectRepoPath: process.cwd(),
-        }),
-      );
-
-      assert.equal(result.success, false);
-      assert.equal(result.errorCode, "backend_unavailable");
-    } finally {
-      process.env.PATH = originalProbe;
-    }
+    assert.equal(result.success, false);
+    assert.equal(result.errorCode, "backend_unavailable");
   });
 
   it("invokes cursor CLI with print mode and redacts stdout tail", async () => {
     const tempDirectory = mkdtempSync(join(tmpdir(), "backend-adapters-"));
+    const binPath = mkdtempSync(join(tmpdir(), "backend-adapters-bin-"));
     const contextRoot = join(tempDirectory, "contexts");
     const taskDirectory = join(contextRoot, "task-1");
+    const originalPath = process.env.PATH;
     mkdirSync(taskDirectory, { recursive: true });
     writeFileSync(join(taskDirectory, "task.md"), "# Do the thing\n\nImplement feature.");
     writeFileSync(join(taskDirectory, "context.md"), "Context details.");
+    writeFileSync(
+      join(binPath, "cursor-agent"),
+      "#!/bin/sh\nprintf 'cursor-agent test-version\\n'\n",
+      "utf8",
+    );
+    chmodSync(join(binPath, "cursor-agent"), 0o755);
+    process.env.PATH = `${binPath}:${originalPath ?? ""}`;
 
     let capturedArgs: string[] = [];
     const runner = new ProcessRunner(async (_command, args) => {
@@ -114,12 +121,14 @@ describe("CLI backend adapters", () => {
       );
 
       assert.equal(result.success, true);
-      assert.deepEqual(capturedArgs.slice(0, 4), ["agent", "--print", "--force", "--model"]);
-      assert.equal(capturedArgs[4], "composer-2.5");
+      assert.deepEqual(capturedArgs.slice(0, 3), ["--print", "--force", "--model"]);
+      assert.equal(capturedArgs[3], "composer-2.5");
       assert.match(result.stdoutSummary ?? "", /completed/u);
       assert.doesNotMatch(result.stdoutSummary ?? "", /super-secret-value/u);
     } finally {
+      process.env.PATH = originalPath;
       rmSync(tempDirectory, { recursive: true, force: true });
+      rmSync(binPath, { recursive: true, force: true });
     }
   });
 
@@ -232,13 +241,13 @@ describe("CLI backend adapters", () => {
       timedOut: true,
     }));
 
-    const adapter = createCursorBackendAdapter({
+    const adapter = createCodexBackendAdapter({
       contextService: new TaskContextService(contextRoot),
       processRunner: runner,
       availabilityCheck: async () => ({
-        backend: "cursor",
+        backend: "codex",
         available: true,
-        message: "cursor available (mocked).",
+        message: "codex available (mocked).",
       }),
     });
 
@@ -246,7 +255,7 @@ describe("CLI backend adapters", () => {
       const result = await adapter.execute(
         buildBackendExecutionContext({
           job: sampleJob(),
-          config: { backend: "cursor", timeoutMs: 1_000 },
+          config: { backend: "codex", timeoutMs: 1_000 },
           projectRepoPath: tempDirectory,
         }),
       );
@@ -282,6 +291,74 @@ describe("CLI backend adapters", () => {
 
       assert.equal(result.success, false);
       assert.equal(result.errorCode, "backend_cli_failed");
+    } finally {
+      rmSync(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("builds normal Spec Kit agent prompts for workflow-step jobs", async () => {
+    const tempDirectory = mkdtempSync(join(tmpdir(), "backend-adapters-spec-kit-"));
+    const featureDirectory = join(tempDirectory, "specs", "feature-a");
+    mkdirSync(featureDirectory, { recursive: true });
+    writeFileSync(join(featureDirectory, "PRD.md"), "Build a portfolio web app.");
+
+    let promptArg = "";
+    const adapter = createCodexBackendAdapter({
+      processRunner: new ProcessRunner(async (_command, args) => {
+        promptArg = args.at(-1) ?? "";
+        return {
+          exitCode: 0,
+          stdout: "done",
+          stderr: "",
+          timedOut: false,
+        };
+      }),
+      availabilityCheck: async () => ({
+        backend: "codex",
+        available: true,
+        message: "codex available (mocked).",
+      }),
+    });
+
+    try {
+      const result = await adapter.execute(
+        buildBackendExecutionContext({
+          job: {
+            ...sampleJob(),
+            id: "job-spec-kit-workflow-step",
+            kind: "workflow-step",
+            backend: "codex",
+            taskId: undefined,
+            payload: {
+              workflowRunId: "workflow-run-1",
+              workflowNodeId: "node-spec-kit",
+              nodeType: "spec-kit-actions",
+              executor: { backend: "codex", args: ["spec", "plan", "tasks"] },
+              inputArtifacts: [
+                {
+                  name: "feature-brief",
+                  path: "specs/feature-a/PRD.md",
+                  required: true,
+                },
+              ],
+              outputArtifacts: [
+                { name: "spec", path: "specs/feature-a/spec.md", required: true },
+                { name: "plan", path: "specs/feature-a/plan.md", required: true },
+                { name: "tasks", path: "specs/feature-a/tasks.md", required: true },
+              ],
+            },
+          },
+          config: { backend: "codex", args: ["spec", "plan", "tasks"] },
+          projectRepoPath: tempDirectory,
+        }),
+      );
+
+      assert.equal(result.success, true);
+      assert.match(promptArg, /\/speckit\.specify/u);
+      assert.match(promptArg, /\/speckit\.plan/u);
+      assert.match(promptArg, /\/speckit\.tasks/u);
+      assert.doesNotMatch(promptArg, /specify spec specs\/feature-a\/PRD\.md/u);
+      assert.match(promptArg, /Build a portfolio web app/u);
     } finally {
       rmSync(tempDirectory, { recursive: true, force: true });
     }

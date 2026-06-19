@@ -14,10 +14,13 @@ import { executeAiReview } from "@/lib/engine/executors/ai-review-executor";
 import { executeAoImplement } from "@/lib/engine/executors/ao-implement-executor";
 import { executeCreateGitHubIssues } from "@/lib/engine/executors/create-github-issues-executor";
 import { executeImportTasks } from "@/lib/engine/executors/import-tasks-executor";
+import { executeMerge } from "@/lib/engine/executors/merge-executor";
 import { executeOpenPr } from "@/lib/engine/executors/open-pr-executor";
+import { executePrReview } from "@/lib/engine/executors/pr-review-executor";
 import { executeRunTests } from "@/lib/engine/executors/run-tests-executor";
 import { executeSpecKitActions } from "@/lib/engine/executors/spec-kit-actions-executor";
 import { parseWorkflowStepJobPayload } from "@/lib/engine/executors/workflow-step-types";
+import { AO_AGENT_PLUGIN_OPTIONS } from "@/lib/workflows/workflow-executor-editor";
 
 export type WorkflowStepDispatcherDeps = {
   repository: LoopBoardRepository;
@@ -75,7 +78,9 @@ export const dispatchWorkflowStepJob = async (
   const projectId = context.job.projectId ?? deps.repository.getWorkflowRun(payload.workflowRunId).projectId;
   const project = deps.repository.getProject(projectId);
   const workflowRun = deps.repository.getWorkflowRun(payload.workflowRunId);
-  const workflow = deps.repository.getWorkflow(workflowRun.workflowId);
+  const workflow = workflowRun.workflowSnapshot?.nodes?.length
+    ? workflowRun.workflowSnapshot
+    : deps.repository.getWorkflow(workflowRun.workflowId);
   const workflowNode = workflow.nodes.find((node) => node.id === payload.workflowNodeId);
   const explicitExecutorConfig =
     resolveExecutorConfig(payload.executor) ??
@@ -181,7 +186,7 @@ export const dispatchWorkflowStepJob = async (
       projectRepoPath: project.repoPath,
       cwd: executorConfig.cwd ?? executorConfig.workingDirectory ?? project.repoPath,
       timeoutMs: executorConfig.timeoutMs,
-      useGhCreateFallback: executorConfig.backend === "stub",
+      processRunner,
     });
 
     return toExecutorResult(stepResult);
@@ -218,35 +223,82 @@ export const dispatchWorkflowStepJob = async (
       featureId,
       repository: deps.repository,
       outputArtifacts: payload.outputArtifacts,
+      engineJobId: context.job.id,
       timeoutMs: executorConfig.timeoutMs,
+      ...(executorConfig.aoAgentPlugin ? { aoAgentPlugin: executorConfig.aoAgentPlugin } : {}),
+      ...(executorConfig.aoAgentModels ? { aoAgentModels: executorConfig.aoAgentModels } : {}),
     });
     return toExecutorResult(stepResult);
   }
 
   if (payload.nodeType === "ai-review") {
     const featureId = typeof payload.featureId === "string" ? payload.featureId : undefined;
-    // Gather PR numbers from the feature's tasks for real Claude Code review
-    let prNumbers: number[] | undefined;
-    let githubRepository: string | undefined;
-    if (featureId) {
-      const feature = deps.repository.getFeature(featureId);
-      const project = deps.repository.getProject(feature.projectId);
-      githubRepository = project.githubRepository;
-      const tasks = deps.repository
-        .listBoardData(project.id)
-        .tasks.filter((t) => t.featureId === featureId && t.github.pullRequestNumber);
-      prNumbers = tasks.map((t) => t.github.pullRequestNumber!).filter(Boolean);
-    }
     const stepResult = await executeAiReview({
       workflowRunId: payload.workflowRunId,
       featureId,
       inputArtifacts: payload.inputArtifacts,
       outputArtifacts: payload.outputArtifacts,
       backend: executorConfig.backend ?? "claude-code",
-      prNumbers,
-      githubRepository,
+      repoPath: project.repoPath,
+      baseBranch: project.defaultBranch,
+      ...(executorConfig.aoAgentPlugin ? { aoAgentPlugin: executorConfig.aoAgentPlugin } : {}),
+      ...(executorConfig.aoAgentModels ? { aoAgentModels: executorConfig.aoAgentModels } : {}),
     });
 
+    return toExecutorResult(stepResult);
+  }
+
+  if (payload.nodeType === "pr-review-agent") {
+    const featureId = typeof payload.featureId === "string" ? payload.featureId : undefined;
+    if (!featureId) {
+      return {
+        success: false,
+        error: "PR-Agent requires a featureId on the workflow run.",
+        logs: [],
+      };
+    }
+    const plugin =
+      executorConfig.aoAgentPlugin ??
+      (executorConfig.backend === "claude-code" ||
+      executorConfig.backend === "codex" ||
+      executorConfig.backend === "cursor"
+        ? executorConfig.backend
+        : "claude-code");
+    const model =
+      executorConfig.aoAgentModels?.[plugin] ??
+      executorConfig.model ??
+      AO_AGENT_PLUGIN_OPTIONS.find((option) => option.value === plugin)?.defaultModel;
+    if (!model) {
+      return {
+        success: false,
+        error: `PR-Agent has no configured model for plugin "${plugin}".`,
+        logs: [],
+      };
+    }
+    const stepResult = await executePrReview({
+      featureId,
+      workflowRunId: payload.workflowRunId,
+      inputArtifacts: payload.inputArtifacts,
+      outputArtifacts: payload.outputArtifacts,
+      projectRepoPath: project.repoPath,
+      repository: project.githubRepository,
+      plugin,
+      model,
+    });
+    return toExecutorResult(stepResult);
+  }
+
+  if (payload.nodeType === "merge") {
+    const stepResult = await executeMerge({
+      workflowRunId: payload.workflowRunId,
+      inputArtifacts: payload.inputArtifacts,
+      outputArtifacts: payload.outputArtifacts,
+      projectRepoPath: project.repoPath,
+      repository: project.githubRepository,
+      defaultBranch: project.defaultBranch,
+      timeoutMs: executorConfig.timeoutMs,
+      processRunner,
+    });
     return toExecutorResult(stepResult);
   }
 

@@ -1,13 +1,16 @@
+import { spawnSync } from "node:child_process";
+
 import type { EngineRunLogEntry } from "@/lib/engine/loop-engine-types";
 import {
   findWorkflowArtifactByName,
+  markWorkflowArtifactUntrusted,
   resolveWorkflowArtifactPlaceholders,
 } from "@/lib/engine/executors/workflow-artifact-paths";
-import type { WorkflowStepExecutorResult } from "@/lib/engine/executors/workflow-step-types";
 import {
-  ProcessRunner,
-  defaultProcessRunner,
-} from "@/lib/engine/process-runner";
+  runPrAgentReview,
+  type PrAgentReviewResult,
+} from "@/lib/engine/executors/pr-agent-review-runner";
+import type { WorkflowStepExecutorResult } from "@/lib/engine/executors/workflow-step-types";
 import type { WorkflowArtifact } from "@/lib/loopboard";
 
 export type PrReviewExecutorInput = {
@@ -16,82 +19,165 @@ export type PrReviewExecutorInput = {
   inputArtifacts: WorkflowArtifact[];
   outputArtifacts: WorkflowArtifact[];
   projectRepoPath: string;
-  cwd: string;
   repository: string;
-  processRunner?: ProcessRunner;
+  plugin: string;
+  model: string;
+  runReview?: typeof runPrAgentReview;
+  readHeadSha?: (prUrl: string) => string | undefined;
 };
-
-const nowIso = (): string => new Date().toISOString();
 
 const logEntry = (
   level: EngineRunLogEntry["level"],
   message: string,
   metadata: EngineRunLogEntry["metadata"] = {},
-): EngineRunLogEntry => ({ timestamp: nowIso(), level, message, metadata });
+): EngineRunLogEntry => ({
+  timestamp: new Date().toISOString(),
+  level,
+  message,
+  metadata,
+});
+
+const isExactPullRequestUrl = (value: string): boolean =>
+  /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+(?:[/?#].*)?$/u.test(value);
+
+const defaultReadHeadSha = (cwd: string, prUrl: string): string | undefined => {
+  const result = spawnSync(
+    "gh",
+    ["pr", "view", prUrl, "--json", "headRefOid", "--jq", ".headRefOid"],
+    { cwd, encoding: "utf8", timeout: 20_000 },
+  );
+  return result.status === 0 ? result.stdout.trim() || undefined : undefined;
+};
 
 export const executePrReview = async (
   input: PrReviewExecutorInput,
 ): Promise<WorkflowStepExecutorResult> => {
-  const runner = input.processRunner ?? defaultProcessRunner;
-  const logs: EngineRunLogEntry[] = [];
-
   const prArtifact = findWorkflowArtifactByName(input.inputArtifacts, ["pull-request"]);
-  if (!prArtifact) {
+  const outputArtifact =
+    findWorkflowArtifactByName(input.outputArtifacts, ["review-comments"]) ??
+    input.outputArtifacts[0];
+
+  if (!prArtifact || !outputArtifact) {
     return {
       success: false,
-      errorCode: "pr_review_input_missing",
-      error: "PR Review requires a pull-request input artifact with a GitHub PR URL.",
-      logs: [logEntry("error", "pull-request input artifact not found.")],
+      errorCode: "pr_review_artifact_missing",
+      error: "PR-Agent requires pull-request input and review-comments output artifacts.",
+      logs: [logEntry("error", "PR-Agent artifacts were not configured.")],
     };
   }
 
-  const resolved = resolveWorkflowArtifactPlaceholders(prArtifact, {
+  const prUrl = resolveWorkflowArtifactPlaceholders(prArtifact, {
     repository: input.repository,
     feature: input.featureId,
     run: input.workflowRunId ?? "unknown",
-  });
-  const prUrl = resolved.path;
-
-  logs.push(logEntry("info", "PR Review executor started.", { prUrl, featureId: input.featureId }));
-
-  let run;
-  try {
-    run = await runner.run({
-      profile: "pr-agent",
-      args: ["--pr_url", prUrl, "review"],
-      cwd: input.cwd,
-      projectRepoPath: input.projectRepoPath,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "pr-agent invocation failed.";
+  }).path;
+  if (!isExactPullRequestUrl(prUrl)) {
     return {
       success: false,
-      errorCode: "pr_review_spawn_failed",
-      error: message,
-      logs: [...logs, logEntry("error", message)],
+      errorCode: "pr_review_url_invalid",
+      error: "PR-Agent requires an exact GitHub /pull/{number} URL.",
+      logs: [logEntry("error", "PR-Agent received an invalid pull request URL.", { prUrl })],
     };
   }
 
-  logs.push(
-    logEntry(run.success ? "info" : "warn", "pr-agent review completed.", {
-      exitCode: run.exitCode ?? -1,
-      durationMs: run.durationMs,
-      stdoutSummary: run.stdoutSummary,
-      stderrSummary: run.stderrSummary,
+  const logs = [
+    logEntry("info", "Final PR-Agent review started.", {
+      prUrl,
+      plugin: input.plugin,
+      model: input.model,
     }),
+  ];
+  const reviewedHeadSha =
+    input.readHeadSha?.(prUrl) ?? defaultReadHeadSha(input.projectRepoPath, prUrl);
+  if (!reviewedHeadSha) {
+    return {
+      success: false,
+      errorCode: "pr_review_head_missing",
+      error: "Could not resolve the final PR head SHA before review.",
+      logs: [...logs, logEntry("error", "Final PR head SHA lookup failed.")],
+    };
+  }
+
+  let review: PrAgentReviewResult;
+  try {
+    review = await (input.runReview ?? runPrAgentReview)({
+      prUrl,
+      plugin: input.plugin,
+      model: input.model,
+      publishOutput: true,
+    });
+  } catch (error) {
+    review = {
+      success: false,
+      error: error instanceof Error ? error.message : "PR-Agent review failed.",
+    };
+  }
+
+  if (!review.success || !review.verdict || !review.summary) {
+    return {
+      success: false,
+      errorCode: "pr_review_failed_closed",
+      error: review.error ?? "PR-Agent did not produce a valid structured review.",
+      result: { prUrl, reviewedHeadSha },
+      logs: [
+        ...logs,
+        logEntry("error", "Final PR-Agent review could not produce a safe verdict.", {
+          error: review.error ?? null,
+        }),
+      ],
+    };
+  }
+
+  const currentHeadSha =
+    input.readHeadSha?.(prUrl) ?? defaultReadHeadSha(input.projectRepoPath, prUrl);
+  if (!currentHeadSha || currentHeadSha !== reviewedHeadSha) {
+    return {
+      success: false,
+      errorCode: "pr_review_head_changed",
+      error: "The pull request head changed during review; a fresh review is required.",
+      result: {
+        prUrl,
+        reviewedHeadSha,
+        currentHeadSha: currentHeadSha ?? null,
+      },
+      logs: [
+        ...logs,
+        logEntry("warn", "Final PR head changed during PR-Agent review.", {
+          reviewedHeadSha,
+          currentHeadSha: currentHeadSha ?? null,
+        }),
+      ],
+    };
+  }
+
+  const branchLabel = review.verdict;
+  const resolvedOutput = markWorkflowArtifactUntrusted(
+    resolveWorkflowArtifactPlaceholders(outputArtifact, {
+      repository: input.repository,
+      feature: input.featureId,
+      run: input.workflowRunId ?? "unknown",
+    }),
+    "PR-Agent review findings are model-generated external content.",
   );
 
-  const outputArtifact = findWorkflowArtifactByName(input.outputArtifacts, ["review-comments"]) ??
-    input.outputArtifacts[0];
-
   return {
-    success: run.success,
-    ...(run.success ? {} : {
-      errorCode: "pr_review_failed",
-      error: run.stderrSummary || "PR Agent review exited with a non-zero code.",
-    }),
-    outputArtifacts: outputArtifact ? [outputArtifact] : [],
-    result: { prUrl, stdoutSummary: run.stdoutSummary, exitCode: run.exitCode },
-    logs,
+    success: true,
+    branchLabel,
+    outputArtifacts: [resolvedOutput],
+    result: {
+      branchLabel,
+      reviewSummary: review.summary,
+      reviewedPrUrl: prUrl,
+      reviewedHeadSha,
+      plugin: input.plugin,
+      model: input.model,
+    },
+    logs: [
+      ...logs,
+      logEntry("info", `Final PR-Agent verdict: ${branchLabel}.`, {
+        prUrl,
+        reviewedHeadSha,
+      }),
+    ],
   };
 };

@@ -34,6 +34,34 @@ const createMockProcessRunner = (
 });
 
 describe("spec-kit-actions-executor", () => {
+  it("requires an agent backend when no test process runner is injected", async () => {
+    const repoPath = mkdtempSync(join(tmpdir(), "loopboard-spec-kit-agent-required-"));
+    mkdirSync(join(repoPath, "specs", "feature-a"), { recursive: true });
+    writeFileSync(join(repoPath, "specs/feature-a/PRD.md"), "# Brief\n", "utf8");
+
+    try {
+      const result = await executeSpecKitActions({
+        projectRepoPath: repoPath,
+        inputArtifacts: [
+          {
+            name: "feature-brief",
+            path: "specs/feature-a/PRD.md",
+            required: true,
+          },
+        ],
+        outputArtifacts: [
+          { name: "spec", path: "specs/feature-a/spec.md", required: true },
+        ],
+      });
+
+      assert.equal(result.success, false);
+      assert.equal(result.errorCode, "spec_kit_requires_agent_backend");
+      assert.match(result.error ?? "", /agent backend/u);
+    } finally {
+      rmSync(repoPath, { recursive: true, force: true });
+    }
+  });
+
   it("resolves feature brief input and verifies generated outputs", async () => {
     const repoPath = mkdtempSync(join(tmpdir(), "loopboard-spec-kit-exec-"));
     const featureFolder = join(repoPath, "specs", "feature-a");

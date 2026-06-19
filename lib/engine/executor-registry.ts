@@ -203,10 +203,7 @@ export class ExecutorRegistry {
       );
     }
 
-    const executor = this.requireExecutor(
-      configValidation.config.backend,
-      job.kind,
-    );
+    const executor = this.requireExecutor(job.backend, job.kind);
 
     return executor.execute({
       job,

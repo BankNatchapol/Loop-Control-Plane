@@ -104,6 +104,8 @@ describe("engine-panel-empty-states", () => {
 
     assert.equal(
       describeEngineMetricsEmptyHint({
+        windowHours: 24,
+        since: "2026-06-16T00:00:00.000Z",
         queued: 0,
         running: 0,
         completed: 0,

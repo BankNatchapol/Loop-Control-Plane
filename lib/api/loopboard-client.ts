@@ -64,6 +64,7 @@ type ApiFailure = {
     message: string;
   };
   validationErrors?: WorkflowFileValidationError[];
+  existingRunId?: string;
 };
 
 type ApiResponse<T> = ApiSuccess<T> | ApiFailure;
@@ -73,6 +74,7 @@ export class LoopBoardApiError extends Error {
     message: string,
     readonly code = "request_failed",
     readonly validationErrors: WorkflowFileValidationError[] = [],
+    readonly existingRunId?: string,
   ) {
     super(message);
   }
@@ -326,6 +328,7 @@ const readApiResponse = async <T>(response: Response): Promise<T> => {
     body?.error.message ?? "LoopBoard could not complete the request.",
     body?.error.code,
     body?.validationErrors ?? [],
+    body?.existingRunId,
   );
 };
 
@@ -501,6 +504,13 @@ export const startEngineScheduler = async (): Promise<EngineSchedulerActionRespo
 
 export const stopEngineScheduler = async (): Promise<EngineSchedulerActionResponse> =>
   writeJson<EngineSchedulerActionResponse>("/api/engine/stop", {});
+
+export type ManagedShutdownResponse = {
+  message: string;
+};
+
+export const requestManagedShutdown = async (): Promise<ManagedShutdownResponse> =>
+  writeJson<ManagedShutdownResponse>("/api/dev/shutdown", {});
 
 export const tickEngine = async ({
   mode = "manual",

@@ -1,25 +1,30 @@
 import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 
-import type { Workflow, WorkflowArtifact, WorkflowRun } from "@/lib/loopboard";
+import type { Project, Workflow, WorkflowArtifact, WorkflowRun } from "@/lib/loopboard";
 import { externalUntrustedPrefix } from "@/lib/security/safe-context";
 
 export const resolveWorkflowArtifactPath = ({
   artifact,
   workflow,
   run,
+  project,
 }: {
   artifact: WorkflowArtifact;
   workflow: Workflow;
   run: WorkflowRun;
+  project?: Pick<Project, "githubRepository" | "defaultBranch">;
 }): WorkflowArtifact => ({
   ...artifact,
   path: artifact.path
     .replaceAll("{run}", run.id)
     .replaceAll("{feature}", run.featureId ?? "project")
-    .replaceAll("{repository}", workflow.projectId)
-    .replaceAll("{defaultBranch}", "default"),
+    .replaceAll("{repository}", project?.githubRepository || workflow.projectId)
+    .replaceAll("{defaultBranch}", project?.defaultBranch || "default"),
 });
+
+export const hasUnresolvedArtifactPlaceholders = (artifact: WorkflowArtifact): boolean =>
+  /\{[A-Za-z][A-Za-z0-9]*\}/u.test(artifact.path);
 
 export const resolveProjectArtifactAbsolutePath = (
   projectRepoPath: string,

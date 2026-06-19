@@ -30,12 +30,14 @@ export type WorkflowRunStatus =
   | "queued"
   | "running"
   | "paused"
+  | "interrupted"
   | "completed"
   | "failed"
   | "cancelled";
 export type WorkflowRunStepStatus =
   | "pending"
   | "running"
+  | "interrupted"
   | "waiting-approval"
   | "completed"
   | "failed"
@@ -162,8 +164,38 @@ export type ProjectAgentOrchestratorSettings = {
   configPath?: string;
   /** Key under `projects:` in the AO config file. */
   projectId?: string;
-  dashboardUrl?: string;
   pollIntervalMs?: number;
+  /** Positive integer caps running workers; 0 = unlimited parallel spawn. */
+  maxConcurrentWorkers?: number;
+};
+
+export type AoRuntimeState = {
+  sessionId?: string;
+  sessionStatus?: string;
+  attentionLevel?: string;
+  activity?: string | null;
+  prUrl?: string;
+  reviewedHeadSha?: string;
+  reviewVerdict?: "approved" | "needs changes";
+  reviewIteration?: number;
+  reviewError?: string;
+  lastSyncedAt?: string;
+  untrusted?: boolean;
+};
+
+export type WorkflowStepCheckpoint = {
+  artifacts?: WorkflowArtifact[];
+  completedUnits?: string[];
+  externalIds?: Record<string, string | number | boolean | null>;
+  state?: Record<string, unknown>;
+  updatedAt?: string;
+};
+
+export type WorkflowInterruption = {
+  reason: string;
+  interruptedAt: string;
+  previousStatus: "queued" | "running" | "paused" | "failed";
+  engineJobId?: string;
 };
 
 export type ProjectEngineSettings = {
@@ -276,6 +308,9 @@ export interface WorkflowRun {
   featureId?: string;
   status: WorkflowRunStatus;
   currentNodeId?: string;
+  workflowVersion: number;
+  workflowSnapshot: Workflow;
+  interruption?: WorkflowInterruption;
   inputArtifacts: WorkflowArtifact[];
   outputArtifacts: WorkflowArtifact[];
   executionLogs: WorkflowLogEntry[];
@@ -292,6 +327,7 @@ export interface WorkflowRunStep {
   workflowNodeId: string;
   status: WorkflowRunStepStatus;
   attempt: number;
+  checkpoint?: WorkflowStepCheckpoint;
   inputArtifacts: WorkflowArtifact[];
   outputArtifacts: WorkflowArtifact[];
   executionLogs: WorkflowLogEntry[];
@@ -400,6 +436,7 @@ export interface Task {
   worktree: string;
   github: GitHubState;
   handoff: HandoffState;
+  aoRuntime?: AoRuntimeState;
   events: TaskEvent[];
   createdAt: string;
   updatedAt: string;
@@ -564,6 +601,7 @@ const seedWorkflowEdge = (
   targetNodeId: string,
   label = "next",
   dashed?: boolean,
+  handles?: Pick<WorkflowEdge, "sourceHandle" | "targetHandle">,
 ): WorkflowEdge => ({
   id: `edge-${sourceNodeId}-to-${targetNodeId}`,
   workflowId: "workflow-feature-development-loop",
@@ -571,6 +609,7 @@ const seedWorkflowEdge = (
   targetNodeId,
   label,
   ...(dashed ? { dashed: true } : {}),
+  ...handles,
   condition: {},
   createdAt: seedWorkflowTimestamp,
   updatedAt: seedWorkflowTimestamp,
@@ -663,46 +702,53 @@ export const seedWorkflows: Workflow[] = [
         { requireApproval: false, maxRetries: 2, riskPolicy: "medium" },
       ),
       seedWorkflowNode(
-        "node-run-tests",
-        "run-tests",
-        "Run Tests",
-        "auto",
-        { x: 1820, y: 120 },
-        [workflowArtifact("implementation-branch", "git://{repository}/{branch}")],
-        [workflowArtifact("test-report", "loopboard://runs/{run}/test-report")],
-        { requireApproval: true, maxRetries: 2, riskPolicy: "low" },
-      ),
-      seedWorkflowNode(
-        "node-ai-review",
-        "ai-review",
-        "AI Review",
-        "auto",
-        { x: 2080, y: 120 },
-        [
-          workflowArtifact("implementation-branch", "git://{repository}/{branch}"),
-          workflowArtifact("test-report", "loopboard://runs/{run}/test-report"),
-        ],
-        [workflowArtifact("review-notes", "loopboard://runs/{run}/review-notes")],
-        { requireApproval: false, riskPolicy: "low" },
-      ),
-      seedWorkflowNode(
         "node-manual-claude-code-edit",
         "manual-claude-code-edit",
         "Manual Claude Code Edit",
         "human",
-        { x: 2080, y: 320 },
-        [workflowArtifact("review-notes", "loopboard://runs/{run}/review-notes")],
+        { x: 1820, y: 0 },
+        [
+          workflowArtifact("implementation-branch", "git://{repository}/{branch}", false),
+          workflowArtifact("test-report", "loopboard://runs/{run}/test-report", false),
+          workflowArtifact("review-comments", "loopboard://runs/{run}/review-comments", false),
+        ],
         [workflowArtifact("manual-patch", "git://{repository}/{branch}")],
         { config: { optional: true } },
+      ),
+      seedWorkflowNode(
+        "node-run-tests",
+        "run-tests",
+        "Run Tests",
+        "auto",
+        { x: 1820, y: 360 },
+        [
+          workflowArtifact("manual-patch", "git://{repository}/{branch}", false),
+          workflowArtifact("implementation-branch", "git://{repository}/{branch}", false),
+        ],
+        [workflowArtifact("test-report", "loopboard://runs/{run}/test-report")],
+        { requireApproval: true, maxRetries: 2, riskPolicy: "low" },
       ),
       seedWorkflowNode(
         "node-open-pr",
         "open-pr",
         "Open PR",
         "semi",
-        { x: 2340, y: 120 },
-        [workflowArtifact("implementation-branch", "git://{repository}/{branch}")],
+        { x: 2080, y: 360 },
+        [
+          workflowArtifact("manual-patch", "git://{repository}/{branch}", false),
+          workflowArtifact("implementation-branch", "git://{repository}/{branch}", false),
+        ],
         [workflowArtifact("pull-request", "https://github.com/{repository}/pulls")],
+        { maxRetries: 1, riskPolicy: "medium" },
+      ),
+      seedWorkflowNode(
+        "node-pr-review-agent",
+        "pr-review-agent",
+        "PR Agent",
+        "auto",
+        { x: 2340, y: 360 },
+        [workflowArtifact("pull-request", "https://github.com/{repository}/pulls")],
+        [workflowArtifact("review-comments", "loopboard://runs/{run}/review-comments")],
         { maxRetries: 1, riskPolicy: "medium" },
       ),
       seedWorkflowNode(
@@ -710,7 +756,7 @@ export const seedWorkflows: Workflow[] = [
         "merge",
         "Merge",
         "human",
-        { x: 2600, y: 120 },
+        { x: 2600, y: 0 },
         [workflowArtifact("pull-request", "https://github.com/{repository}/pulls")],
         [workflowArtifact("merged-branch", "git://{repository}/{defaultBranch}")],
         { riskPolicy: "manual-only" },
@@ -724,12 +770,13 @@ export const seedWorkflows: Workflow[] = [
       seedWorkflowEdge("node-human-review",                   "node-import-tasks"),
       seedWorkflowEdge("node-import-tasks",                   "node-create-github-issues"),
       seedWorkflowEdge("node-create-github-issues",           "node-agent-orchestrator-implement"),
-      seedWorkflowEdge("node-agent-orchestrator-implement",   "node-run-tests"),
-      seedWorkflowEdge("node-run-tests",                      "node-ai-review"),
-      seedWorkflowEdge("node-ai-review",                      "node-open-pr",                         "approved"),
-      seedWorkflowEdge("node-ai-review",                      "node-manual-claude-code-edit",         "needs changes", true),
-      seedWorkflowEdge("node-manual-claude-code-edit",        "node-run-tests",                       "retry",         true),
-      seedWorkflowEdge("node-open-pr",                        "node-merge"),
+      seedWorkflowEdge("node-agent-orchestrator-implement",   "node-manual-claude-code-edit",         "next",          false, { sourceHandle: "right", targetHandle: "left" }),
+      seedWorkflowEdge("node-manual-claude-code-edit",        "node-run-tests",                       "next",          false, { sourceHandle: "bottom", targetHandle: "top" }),
+      seedWorkflowEdge("node-run-tests",                      "node-open-pr",                         "passed",        false, { sourceHandle: "right", targetHandle: "left" }),
+      seedWorkflowEdge("node-run-tests",                      "node-manual-claude-code-edit",         "failed",        true,  { sourceHandle: "left", targetHandle: "left" }),
+      seedWorkflowEdge("node-open-pr",                        "node-pr-review-agent",                 "next",          false, { sourceHandle: "right", targetHandle: "left" }),
+      seedWorkflowEdge("node-pr-review-agent",                "node-merge",                           "approved",      false, { sourceHandle: "top", targetHandle: "bottom" }),
+      seedWorkflowEdge("node-pr-review-agent",                "node-manual-claude-code-edit",         "needs changes", true,  { sourceHandle: "top", targetHandle: "right" }),
     ],
     config: {
       defaultFeatureId: "feature-kanban-control-plane",

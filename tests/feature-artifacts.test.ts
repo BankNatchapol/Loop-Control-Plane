@@ -19,6 +19,34 @@ const withFixtureProject = (test: (repoPath: string) => void) => {
 };
 
 describe("feature artifact discovery", () => {
+  it("automatically links repository-root artifacts and persists the folder as dot", () => {
+    withFixtureProject((repoPath) => {
+      writeFileSync(join(repoPath, "PRD.md"), "# Root PRD\n", "utf8");
+
+      const discovered = discoverFeatureArtifacts({
+        project: { ...seedProject, repoPath },
+      });
+
+      assert.equal(discovered.artifactFolderPath, ".");
+      assert.equal(discovered.prdPath, "PRD.md");
+      assert.equal(discovered.artifacts.prd.exists, true);
+      assert.equal(discovered.artifacts.prd.approved, true);
+      assert.equal(discovered.artifacts.spec.exists, false);
+    });
+  });
+
+  it("keeps artifacts unlinked when no folder or root artifact exists", () => {
+    withFixtureProject((repoPath) => {
+      const discovered = discoverFeatureArtifacts({
+        project: { ...seedProject, repoPath },
+      });
+
+      assert.equal(discovered.artifactFolderPath, "");
+      assert.equal(discovered.prdPath, "");
+      assert.equal(discovered.artifacts.prd.exists, false);
+    });
+  });
+
   it("detects Spec Kit artifact files inside a linked feature folder", () => {
     withFixtureProject((repoPath) => {
       const featureFolder = join(repoPath, "specs", "loopboard-mvp", "feature-a");

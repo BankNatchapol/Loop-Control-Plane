@@ -27,8 +27,10 @@ import clsx from "clsx";
 import {
   AlertTriangle,
   Check,
+  CheckCircle2,
   Download,
   ExternalLink,
+  FlaskConical,
   GitBranch,
   Plus,
   Redo2,
@@ -54,6 +56,7 @@ import {
   fetchProjectWorkflows,
   importProjectWorkflow,
   startWorkflowRun,
+  resumeWorkflowRunFromEngine,
   tickEngine,
   updateWorkflow,
   LoopBoardApiError,
@@ -90,6 +93,7 @@ import {
   createCatalogWorkflowNode,
   hasBlockingWorkflowIssues,
   normalizeWorkflowEdge,
+  applyWorkflowEdgeDisplayDefaults,
   validateWorkflowDefinition,
   workflowNodeCatalog,
   workflowNodeModes,
@@ -98,8 +102,12 @@ import {
   type WorkflowEditorNodeType,
 } from "@/lib/workflows/workflow-editor";
 import {
+  AO_AGENT_PLUGIN_DEFAULT,
+  AO_AGENT_PLUGIN_OPTIONS,
+  aoAgentPluginLabel,
   applyExecutorEditorPatch,
   executorBackendSupportsFanOut,
+  workflowNodeSupportsAgentPlugin,
   executorBackendSupportsModel,
   extractEngineJobIdFromWorkflowStep,
   readExecutorEditorState,
@@ -141,7 +149,7 @@ const CATALOG_GROUPS: CatalogGroup[] = [
     functions: [
       { type: "agent-orchestrator-implement", label: "Implement",  defaultName: "Agent Implement" },
       { type: "ai-review",                    label: "AI Review",  defaultName: "AI Review"       },
-      { type: "pr-review-agent",              label: "PR Review",  defaultName: "PR Review"       },
+      { type: "pr-review-agent",              label: "PR Agent",   defaultName: "PR Agent"        },
     ],
   },
   {
@@ -171,12 +179,8 @@ const NODE_SUBNODES: Partial<Record<string, CanvasSubNode[]>> = {
     { label: "Implement" },
     { label: "Fix CI",           loops: true },
     { label: "Open PR" },
+    { label: "PR-Agent Review",  loops: true },
     { label: "Address Reviews",  loops: true },
-  ],
-  "pr-review-agent": [
-    { label: "Fetch PR Diff" },
-    { label: "Review Code" },
-    { label: "Post Comments" },
   ],
   "spec-kit-actions": [
     { label: "Generate Spec" },
@@ -222,6 +226,11 @@ const bestHandles = (
     ? { sourceHandle: "bottom", targetHandle: "top" }
     : { sourceHandle: "top", targetHandle: "bottom" };
 };
+
+const workflowWithDisplayEdges = (workflow: Workflow): Workflow => ({
+  ...workflow,
+  edges: applyWorkflowEdgeDisplayDefaults(workflow.edges),
+});
 
 const edgeToCanvasEdge = (edge: WorkflowEdge, posMap?: NodePositionMap): Edge => {
   const auto = bestHandles(
@@ -643,6 +652,8 @@ export function WorkflowEditor({
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const [openGroupId, setOpenGroupId] = useState<string | null>(null);
+  const [agentProbeResult, setAgentProbeResult] = useState<{ available: boolean; message: string; version?: string } | null>(null);
+  const [agentProbePending, setAgentProbePending] = useState(false);
 
   const selectedNode = useMemo(
     () => draftWorkflow?.nodes.find((node) => node.id === selectedNodeId),
@@ -700,6 +711,33 @@ export function WorkflowEditor({
       .filter((step) => step.workflowNodeId === currentRun.currentNodeId)
       .at(-1);
   }, [currentRun]);
+  const currentRunNode = useMemo(() => {
+    if (!currentRun?.currentNodeId) {
+      return undefined;
+    }
+
+    return currentRun.workflowSnapshot.nodes.find(
+      (node) => node.id === currentRun.currentNodeId,
+    );
+  }, [currentRun]);
+  const currentRunExecutor = useMemo(
+    () => (currentRunNode ? readExecutorEditorState(currentRunNode) : undefined),
+    [currentRunNode],
+  );
+  const currentDraftNode = useMemo(
+    () =>
+      currentRun?.currentNodeId
+        ? draftWorkflow?.nodes.find((node) => node.id === currentRun.currentNodeId)
+        : undefined,
+    [currentRun, draftWorkflow],
+  );
+  const currentDraftExecutor = useMemo(
+    () => (currentDraftNode ? readExecutorEditorState(currentDraftNode) : undefined),
+    [currentDraftNode],
+  );
+  const aoRunAgentChanged =
+    currentRunNode?.type === "agent-orchestrator-implement" &&
+    currentRunExecutor?.aoAgentPlugin !== currentDraftExecutor?.aoAgentPlugin;
   const currentEngineJob = useMemo(() => {
     if (!engineStatus || !currentRun) {
       return undefined;
@@ -865,6 +903,12 @@ export function WorkflowEditor({
     );
   }, []);
 
+  const loadWorkflowIntoEditor = useCallback((workflow: Workflow) => {
+    const displayWorkflow = workflowWithDisplayEdges(workflow);
+    setDraftWorkflow(displayWorkflow);
+    syncCanvas(displayWorkflow);
+  }, [syncCanvas]);
+
   const loadWorkflows = useCallback(async () => {
     if (!project) {
       setWorkflows([]);
@@ -888,8 +932,7 @@ export function WorkflowEditor({
 
       setWorkflows(loadedWorkflows);
       setSelectedWorkflowId(workflow.id);
-      setDraftWorkflow(workflow);
-      syncCanvas(workflow);
+      loadWorkflowIntoEditor(workflow);
     } catch (loadError) {
       setError(
         loadError instanceof LoopBoardApiError
@@ -899,7 +942,7 @@ export function WorkflowEditor({
     } finally {
       setIsLoading(false);
     }
-  }, [project, syncCanvas]);
+  }, [project, loadWorkflowIntoEditor]);
 
   useEffect(() => {
     void loadWorkflows();
@@ -1089,30 +1132,36 @@ export function WorkflowEditor({
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
     const hasRemoval = changes.some((c) => c.type === "remove");
-    if (hasRemoval && draftWorkflowRef.current) {
-      pushToHistory(draftWorkflowRef.current);
+    const currentWorkflow = draftWorkflowRef.current;
+
+    if (!hasRemoval || !currentWorkflow) {
+      setEdges((currentEdges) => applyEdgeChanges(changes, currentEdges));
+      return;
     }
-    setEdges((currentEdges) => applyEdgeChanges(changes, currentEdges));
-    setDraftWorkflow((currentWorkflow) => {
-      if (!currentWorkflow) {
-        return currentWorkflow;
-      }
 
-      const removedEdgeIds = new Set(
-        changes
-          .filter((change) => change.type === "remove")
-          .map((change) => change.id),
-      );
+    pushToHistory(currentWorkflow);
+    const removedEdgeIds = new Set(
+      changes
+        .filter((change) => change.type === "remove")
+        .map((change) => change.id),
+    );
+    const nextWorkflow = {
+      ...currentWorkflow,
+      edges: applyWorkflowEdgeDisplayDefaults(
+        currentWorkflow.edges.filter((edge) => !removedEdgeIds.has(edge.id)),
+      ),
+    };
+    const dashedById = new Map(
+      nextWorkflow.edges.map((edge) => [edge.id, edge.dashed === true] as const),
+    );
 
-      if (removedEdgeIds.size === 0) {
-        return currentWorkflow;
-      }
-
-      return {
-        ...currentWorkflow,
-        edges: currentWorkflow.edges.filter((edge) => !removedEdgeIds.has(edge.id)),
-      };
-    });
+    setEdges((currentEdges) =>
+      applyEdgeChanges(changes, currentEdges).map((edge) => ({
+        ...edge,
+        animated: dashedById.get(edge.id) ?? false,
+      })),
+    );
+    setDraftWorkflow(nextWorkflow);
   }, [pushToHistory]);
 
   const isValidConnection = useCallback((connection: Edge | Connection): boolean => {
@@ -1275,8 +1324,7 @@ export function WorkflowEditor({
 
     resetHistory();
     setSelectedWorkflowId(workflow.id);
-    setDraftWorkflow(workflow);
-    syncCanvas(workflow);
+    loadWorkflowIntoEditor(workflow);
     setMessage("");
     setError("");
   };
@@ -1289,8 +1337,7 @@ export function WorkflowEditor({
     resetHistory();
     const workflow = createDraftWorkflow(project.id);
     setSelectedWorkflowId(workflow.id);
-    setDraftWorkflow(workflow);
-    syncCanvas(workflow);
+    loadWorkflowIntoEditor(workflow);
     setMessage("");
     setError("");
   };
@@ -1385,12 +1432,20 @@ export function WorkflowEditor({
     setMessage("");
 
     try {
+      const canvasEdgesById = new Map(edges.map((edge) => [edge.id, edge]));
       const payload = {
         name: draftWorkflow.name,
         description: draftWorkflow.description,
         version: draftWorkflow.version,
         nodes: draftWorkflow.nodes,
-        edges: draftWorkflow.edges,
+        edges: draftWorkflow.edges.map((edge) => {
+          const canvasEdge = canvasEdgesById.get(edge.id);
+          return {
+            ...edge,
+            sourceHandle: canvasEdge?.sourceHandle ?? edge.sourceHandle,
+            targetHandle: canvasEdge?.targetHandle ?? edge.targetHandle,
+          };
+        }),
         config: draftWorkflow.config,
       };
       const savedWorkflow = workflows.some((workflow) => workflow.id === draftWorkflow.id)
@@ -1406,8 +1461,7 @@ export function WorkflowEditor({
         );
       });
       setSelectedWorkflowId(savedWorkflow.id);
-      setDraftWorkflow(savedWorkflow);
-      syncCanvas(savedWorkflow);
+      loadWorkflowIntoEditor(savedWorkflow);
       setMessage("Workflow definition saved.");
     } catch (saveError) {
       setError(
@@ -1466,8 +1520,7 @@ export function WorkflowEditor({
       );
     });
     setSelectedWorkflowId(result.workflow.id);
-    setDraftWorkflow(result.workflow);
-    syncCanvas(result.workflow);
+    loadWorkflowIntoEditor(result.workflow);
     setImportOverwrite(null);
     setFileValidationErrors([]);
     setMessage(`Imported workflow from ${result.path}.`);
@@ -1533,6 +1586,14 @@ export function WorkflowEditor({
           : "Workflow run started.",
       );
     } catch (runError) {
+      if (
+        runError instanceof LoopBoardApiError &&
+        runError.code === "resumable_workflow_run_exists" &&
+        runError.existingRunId
+      ) {
+        const existingRun = await fetchWorkflowRun(runError.existingRunId);
+        setCurrentRun(existingRun);
+      }
       setError(
         runError instanceof LoopBoardApiError
           ? runError.message
@@ -1544,7 +1605,7 @@ export function WorkflowEditor({
   };
 
   const runAction = async (
-    action: "run-next" | "run-next-engine" | "approve" | "skip-disabled" | "fail" | "resume",
+    action: "run-next" | "run-next-engine" | "approve" | "skip" | "fail" | "resume" | "abandon",
   ) => {
     if (!currentRun) {
       return;
@@ -1555,6 +1616,13 @@ export function WorkflowEditor({
     setMessage("");
 
     try {
+      if (action === "resume" && currentRun.status === "interrupted") {
+        const response = await resumeWorkflowRunFromEngine(currentRun.id);
+        setCurrentRun(response.run);
+        await refreshEngineStatus();
+        setMessage("Interrupted workflow reconciled and resumed.");
+        return;
+      }
       if (action === "run-next-engine") {
         const run = await applyWorkflowRunAction({
           runId: currentRun.id,
@@ -1602,6 +1670,37 @@ export function WorkflowEditor({
     }
   };
 
+  const saveAoAgentModel = async (plugin: string, model: string) => {
+    if (!project?.id) return;
+    // If this plugin is currently active, update the YAML immediately
+    const activePlugin = selectedNodeExecutor?.aoAgentPlugin || AO_AGENT_PLUGIN_DEFAULT;
+    if (plugin === activePlugin && model.trim()) {
+      try {
+        await fetch(`/api/projects/${project.id}/ao-config`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: model.trim() }),
+        });
+      } catch {
+        // non-critical — executor will retry at spawn time
+      }
+    }
+  };
+
+  const testAgentPlugin = async (plugin: string) => {
+    setAgentProbeResult(null);
+    setAgentProbePending(true);
+    try {
+      const response = await fetch(`/api/ao/agent-probe?plugin=${encodeURIComponent(plugin)}`);
+      const data = await response.json() as { available: boolean; message: string; version?: string };
+      setAgentProbeResult(data);
+    } catch {
+      setAgentProbeResult({ available: false, message: "Failed to reach the agent probe API." });
+    } finally {
+      setAgentProbePending(false);
+    }
+  };
+
   const updateSelectedNodeExecutor = (
     patch: {
       backend?: ExecutorBackend;
@@ -1610,6 +1709,8 @@ export function WorkflowEditor({
       model?: string;
       fanOutMaxConcurrency?: string;
       fanOutIssueIdsText?: string;
+      aoAgentPlugin?: string;
+      aoAgentModels?: Record<string, string>;
     },
   ) => {
     if (!selectedNode) {
@@ -2046,21 +2147,47 @@ export function WorkflowEditor({
                     </button>
                     <button
                       type="button"
-                      onClick={() => void runAction("skip-disabled")}
-                      disabled={isRunBusy || currentRun.status === "paused"}
+                      onClick={() => void runAction("skip")}
+                      disabled={
+                        isRunBusy ||
+                        currentWorkflowStep?.status === "running" ||
+                        currentRun.status === "interrupted" ||
+                        currentRun.status === "completed" ||
+                        currentRun.status === "failed" ||
+                        currentRun.status === "cancelled"
+                      }
+                      data-testid="workflow-skip"
                       className="inline-flex min-h-9 items-center justify-center gap-2 border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:border-amber-300 hover:bg-amber-50 hover:text-amber-800 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <SkipForward className="h-4 w-4" />
-                      Skip Disabled
+                      Skip Node
                     </button>
                     <button
                       type="button"
                       onClick={() => void runAction("resume")}
-                      disabled={isRunBusy || currentRun.status !== "paused"}
+                      disabled={
+                        isRunBusy ||
+                        (currentRun.status !== "paused" &&
+                          currentRun.status !== "interrupted")
+                      }
                       className="inline-flex min-h-9 items-center justify-center gap-2 border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <RotateCw className="h-4 w-4" />
                       Resume
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void runAction("abandon")}
+                      disabled={
+                        isRunBusy ||
+                        currentRun.status === "completed" ||
+                        currentRun.status === "cancelled"
+                      }
+                      data-testid="workflow-abandon"
+                      className="inline-flex min-h-9 items-center justify-center gap-2 border border-red-300 bg-white px-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <XCircle className="h-4 w-4" />
+                      Abandon Run
                     </button>
                     <button
                       type="button"
@@ -2087,10 +2214,29 @@ export function WorkflowEditor({
                               {currentEngineJob.status}
                             </span>
                             {" · "}
-                            {currentEngineJob.backend}
+                            {currentEngineJob.runtimeLabel ??
+                              (currentRunNode?.type === "agent-orchestrator-implement"
+                                ? `Agent Orchestrator · ${aoAgentPluginLabel(
+                                    currentRunExecutor?.aoAgentPlugin,
+                                  )}`
+                                : currentEngineJob.backend)}
                             {" · "}
                             attempt {currentEngineJob.attempt}/{currentEngineJob.maxAttempts}
                           </p>
+                          {currentRunNode?.type === "agent-orchestrator-implement" ? (
+                            <p className="mt-1 text-slate-500">
+                              Queued through the built-in workflow dispatcher.
+                            </p>
+                          ) : null}
+                          {aoRunAgentChanged ? (
+                            <p className="mt-1 border border-amber-200 bg-amber-50 px-2 py-1 text-amber-900">
+                              This run is pinned to{" "}
+                              {aoAgentPluginLabel(currentRunExecutor?.aoAgentPlugin)}.
+                              The saved workflow now uses{" "}
+                              {aoAgentPluginLabel(currentDraftExecutor?.aoAgentPlugin)}.
+                              Start a new run to apply the saved agent.
+                            </p>
+                          ) : null}
                           {currentEngineJob.lastLogMessage ? (
                             <p className="mt-1 text-slate-500">
                               {currentEngineJob.lastLogMessage}
@@ -2131,11 +2277,14 @@ export function WorkflowEditor({
                                 <p className="mb-1 font-sans text-[10px] font-semibold uppercase text-slate-400">
                                   Workflow Step
                                 </p>
-                                {visibleWorkflowLogs.map((entry) => {
+                                {visibleWorkflowLogs.map((entry, index) => {
                                   const metadata = formatLogMetadata(entry.metadata);
 
                                   return (
-                                    <div key={`${entry.timestamp}-${entry.message}`} className="py-0.5">
+                                    <div
+                                      key={`workflow-${entry.timestamp}-${entry.message}-${index}`}
+                                      className="py-0.5"
+                                    >
                                       <span className="text-slate-500">
                                         {formatLogTime(entry.timestamp)}
                                       </span>{" "}
@@ -2156,11 +2305,14 @@ export function WorkflowEditor({
                                 <p className="mb-1 font-sans text-[10px] font-semibold uppercase text-slate-400">
                                   Engine
                                 </p>
-                                {visibleEngineLogs.map((entry) => {
+                                {visibleEngineLogs.map((entry, index) => {
                                   const metadata = formatLogMetadata(entry.metadata);
 
                                   return (
-                                    <div key={`${entry.timestamp}-${entry.message}`} className="py-0.5">
+                                    <div
+                                      key={`engine-${entry.timestamp}-${entry.message}-${index}`}
+                                      className="py-0.5"
+                                    >
                                       <span className="text-slate-500">
                                         {formatLogTime(entry.timestamp)}
                                       </span>{" "}
@@ -2311,11 +2463,6 @@ export function WorkflowEditor({
                 {/* Agent backend selector — shown for agent-group nodes with a switchable LLM backend */}
                 {selectedNode && (() => {
                   const SWITCHABLE_BACKENDS: Partial<Record<string, Array<{ value: string; label: string }>>> = {
-                    "pr-review-agent": [
-                      { value: "claude-code", label: "Claude Code" },
-                      { value: "codex",       label: "Codex"       },
-                      { value: "cursor",      label: "Cursor"      },
-                    ],
                     "ai-review": [
                       { value: "claude-code", label: "Claude Code" },
                       { value: "codex",       label: "Codex"       },
@@ -2508,7 +2655,7 @@ export function WorkflowEditor({
                         }
                         className="min-h-9 border border-slate-300 bg-white px-2 text-sm font-normal normal-case text-slate-950"
                       >
-                        {workflowExecutorBackendOptions().map((backend) => (
+                        {workflowExecutorBackendOptions(selectedNode.type).map((backend) => (
                           <option key={backend} value={backend}>
                             {compactText(
                               workflowExecutorBackendLabel(backend, selectedNode.type),
@@ -2569,21 +2716,93 @@ export function WorkflowEditor({
                     {executorBackendSupportsFanOut(selectedNodeExecutor.backend) ? (
                       <>
                         <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
-                          AO Fan-out Concurrency
+                          Max Concurrent Workers (override)
                           <input
                             aria-label="Agent Orchestrator fan-out max concurrency"
                             type="number"
-                            min={1}
+                            min={0}
                             value={selectedNodeExecutor.fanOutMaxConcurrency}
                             onChange={(event) =>
                               updateSelectedNodeExecutor({
                                 fanOutMaxConcurrency: event.target.value,
                               })
                             }
-                            placeholder="3"
+                            placeholder="2"
                             className="min-h-9 border border-slate-300 bg-white px-2 text-sm font-normal normal-case text-slate-950"
                           />
                         </label>
+                        <p className="text-[11px] leading-5 text-slate-500">
+                          Empty uses project default (2). Set 0 for unlimited parallel spawn.
+                        </p>
+                        {(() => {
+                          const currentPlugin = selectedNodeExecutor.aoAgentPlugin || AO_AGENT_PLUGIN_DEFAULT;
+                          const currentOpt = AO_AGENT_PLUGIN_OPTIONS.find((o) => o.value === currentPlugin);
+                          return (
+                            <>
+                              <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+                                Agent
+                                <div className="flex gap-1.5">
+                                  <select
+                                    aria-label="Agent Orchestrator agent plugin"
+                                    value={currentPlugin}
+                                    onChange={(event) => {
+                                      const newPlugin = event.target.value;
+                                      updateSelectedNodeExecutor({ aoAgentPlugin: newPlugin });
+                                      setAgentProbeResult(null);
+                                      const storedModel = selectedNodeExecutor.aoAgentModels?.[newPlugin];
+                                      if (storedModel) saveAoAgentModel(newPlugin, storedModel);
+                                    }}
+                                    className="min-h-9 flex-1 border border-slate-300 bg-white px-2 text-sm font-normal normal-case text-slate-950"
+                                  >
+                                    {AO_AGENT_PLUGIN_OPTIONS.map((opt) => (
+                                      <option key={opt.value} value={opt.value}>
+                                        {opt.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <button
+                                    type="button"
+                                    aria-label="Test selected agent"
+                                    disabled={agentProbePending}
+                                    onClick={() => testAgentPlugin(currentPlugin)}
+                                    className="flex min-h-9 items-center gap-1 border border-slate-300 bg-white px-2 text-xs font-semibold uppercase text-slate-600 hover:border-slate-400 hover:text-slate-900 disabled:opacity-50"
+                                  >
+                                    <FlaskConical className="h-3.5 w-3.5 shrink-0" />
+                                    {agentProbePending ? "…" : "Test"}
+                                  </button>
+                                </div>
+                                {agentProbeResult && (
+                                  <p className={`flex items-center gap-1 text-[11px] leading-4 ${agentProbeResult.available ? "text-emerald-700" : "text-red-600"}`}>
+                                    {agentProbeResult.available
+                                      ? <CheckCircle2 className="h-3 w-3 shrink-0" />
+                                      : <XCircle className="h-3 w-3 shrink-0" />}
+                                    {agentProbeResult.message}
+                                  </p>
+                                )}
+                              </label>
+                              <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+                                Model
+                                <input
+                                  aria-label="Agent model"
+                                  value={selectedNodeExecutor.aoAgentModels?.[currentPlugin] ?? ""}
+                                  onChange={(event) => {
+                                    const val = event.target.value;
+                                    const next = { ...selectedNodeExecutor.aoAgentModels };
+                                    if (val.trim()) {
+                                      next[currentPlugin] = val;
+                                    } else {
+                                      delete next[currentPlugin];
+                                    }
+                                    updateSelectedNodeExecutor({ aoAgentModels: next });
+                                  }}
+                                  onBlur={(event) => saveAoAgentModel(currentPlugin, event.target.value)}
+                                  placeholder={currentOpt?.defaultModel ?? "e.g. claude-sonnet-4-6"}
+                                  className="min-h-9 border border-slate-300 bg-white px-2 font-mono text-sm font-normal normal-case text-slate-950"
+                                />
+                              </label>
+                            </>
+                          );
+                        })()}
                         <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
                           AO Fan-out Issue IDs
                           <input
@@ -2600,6 +2819,88 @@ export function WorkflowEditor({
                         </label>
                       </>
                     ) : null}
+                    {workflowNodeSupportsAgentPlugin(selectedNode?.type ?? "") &&
+                    !executorBackendSupportsFanOut(selectedNodeExecutor.backend)
+                      ? (() => {
+                          const currentPlugin =
+                            selectedNodeExecutor.aoAgentPlugin || AO_AGENT_PLUGIN_DEFAULT;
+                          const currentOpt = AO_AGENT_PLUGIN_OPTIONS.find(
+                            (o) => o.value === currentPlugin,
+                          );
+                          return (
+                            <>
+                              <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+                                Agent
+                                <div className="flex gap-1.5">
+                                  <select
+                                    aria-label="Agent plugin"
+                                    value={currentPlugin}
+                                    onChange={(event) => {
+                                      const newPlugin = event.target.value;
+                                      updateSelectedNodeExecutor({ aoAgentPlugin: newPlugin });
+                                      setAgentProbeResult(null);
+                                      const storedModel =
+                                        selectedNodeExecutor.aoAgentModels?.[newPlugin];
+                                      if (storedModel) saveAoAgentModel(newPlugin, storedModel);
+                                    }}
+                                    className="min-h-9 flex-1 border border-slate-300 bg-white px-2 text-sm font-normal normal-case text-slate-950"
+                                  >
+                                    {AO_AGENT_PLUGIN_OPTIONS.map((opt) => (
+                                      <option key={opt.value} value={opt.value}>
+                                        {opt.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <button
+                                    type="button"
+                                    aria-label="Test selected agent"
+                                    disabled={agentProbePending}
+                                    onClick={() => testAgentPlugin(currentPlugin)}
+                                    className="flex min-h-9 items-center gap-1 border border-slate-300 bg-white px-2 text-xs font-semibold uppercase text-slate-600 hover:border-slate-400 hover:text-slate-900 disabled:opacity-50"
+                                  >
+                                    <FlaskConical className="h-3.5 w-3.5 shrink-0" />
+                                    {agentProbePending ? "…" : "Test"}
+                                  </button>
+                                </div>
+                                {agentProbeResult && (
+                                  <p
+                                    className={`flex items-center gap-1 text-[11px] leading-4 ${agentProbeResult.available ? "text-emerald-700" : "text-red-600"}`}
+                                  >
+                                    {agentProbeResult.available ? (
+                                      <CheckCircle2 className="h-3 w-3 shrink-0" />
+                                    ) : (
+                                      <XCircle className="h-3 w-3 shrink-0" />
+                                    )}
+                                    {agentProbeResult.message}
+                                  </p>
+                                )}
+                              </label>
+                              <label className="grid gap-1 text-xs font-semibold uppercase text-slate-500">
+                                Model
+                                <input
+                                  aria-label="Agent model"
+                                  value={selectedNodeExecutor.aoAgentModels?.[currentPlugin] ?? ""}
+                                  onChange={(event) => {
+                                    const val = event.target.value;
+                                    const next = { ...selectedNodeExecutor.aoAgentModels };
+                                    if (val.trim()) {
+                                      next[currentPlugin] = val;
+                                    } else {
+                                      delete next[currentPlugin];
+                                    }
+                                    updateSelectedNodeExecutor({ aoAgentModels: next });
+                                  }}
+                                  onBlur={(event) =>
+                                    saveAoAgentModel(currentPlugin, event.target.value)
+                                  }
+                                  placeholder={currentOpt?.defaultModel ?? "e.g. claude-sonnet-4-6"}
+                                  className="min-h-9 border border-slate-300 bg-white px-2 font-mono text-sm font-normal normal-case text-slate-950"
+                                />
+                              </label>
+                            </>
+                          );
+                        })()
+                      : null}
                     <a
                       href="/docs/architecture/loop-execution-engine.md"
                       target="_blank"

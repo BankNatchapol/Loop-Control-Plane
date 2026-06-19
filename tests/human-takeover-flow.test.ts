@@ -247,7 +247,7 @@ describe("human takeover and return flow", () => {
                 context: { taskId: "task-local-persistence-reset", files: {} },
                 prompt: {
                   taskId: "task-local-persistence-reset",
-                  prompt: "You are Claude Code working in a local LoopBoard handoff.",
+                  prompt: "You are Claude Code working in a local Loop Control Plane handoff.",
                   paths: {
                     directory: "/tmp/task-contexts/task-local-persistence-reset",
                     task: "/tmp/task-contexts/task-local-persistence-reset/task.md",
@@ -270,7 +270,7 @@ describe("human takeover and return flow", () => {
                   content: "# Handoff\n\n## Human notes\n\nManual note.",
                   sections: {
                     generated: {
-                      sourceOfTruth: "LoopBoard task state",
+                      sourceOfTruth: "Loop Control Plane task state",
                       refreshBehavior: "Refreshed from generated state.",
                     },
                     humanNotes: {

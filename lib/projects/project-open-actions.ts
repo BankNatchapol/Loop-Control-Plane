@@ -95,7 +95,7 @@ export const openProjectPath = (
     runner.launch(command.command, command.args);
   } catch {
     throw new ProjectOpenActionError(
-      `LoopBoard could not launch ${command.command}.`,
+      `Loop Control Plane could not launch ${command.command}.`,
       500,
       "project_open_failed",
     );

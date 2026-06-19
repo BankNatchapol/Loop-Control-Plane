@@ -87,6 +87,25 @@ npm run dev           # http://localhost:3000
 
 Optional seed data: `npm run db:seed`
 
+### Managed Agent Orchestrator development
+
+This repository pins the customized Agent Orchestrator fork as a git submodule.
+Initialize and build it once:
+
+```bash
+npm run ao:setup
+```
+
+Then start both applications under one lifecycle supervisor:
+
+```bash
+npm run dev:managed
+```
+
+Open **http://localhost:3100** as the operator console. AO runs headless in the background (REST API on port 3000, terminal mux proxied on port 31101). Startup clears stale AO runtimes from interrupted runs.
+Stopping either child, or pressing Ctrl-C in the managed terminal, stops both
+services and removes every AO session runtime and managed worktree.
+
 ### Five-minute walkthrough (no GitHub required)
 
 **1. Create a test repo**
@@ -222,14 +241,13 @@ Navigate to **Workflows** to create visual pipelines. Add nodes from the catalog
 | `auto` | Runner may advance without sign-off (subject to risk policy) |
 | `human` | Pauses until you approve |
 | `semi` | Automation that still requires operator confirmation |
-| `disabled` | Skipped by the runner |
 
 **Runner actions:**
 
 - **Start Run** — creates a run at the first node
 - **Run Next Step** — evaluates the current node (or enqueues an engine job)
 - **Approve Human Step** — signs off on a paused node and advances
-- **Skip Disabled Step** — skips disabled nodes
+- **Skip Node** — marks the current node skipped and advances to its next path
 - **Fail Step** — marks the node and run as failed
 
 The runner never auto-merges, auto-deploys, or executes unreviewed shell commands.

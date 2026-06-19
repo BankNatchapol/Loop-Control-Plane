@@ -8,6 +8,7 @@ import type {
   EngineSchedulerStatus,
   ExecutorBackend,
 } from "@/lib/engine/loop-engine-types";
+import { readAoWorkerPoolSnapshot } from "@/lib/engine/ao-worker-pool-types";
 import {
   LoopScheduler,
   redactEngineLogEntry,
@@ -45,6 +46,7 @@ import { resumeWorkflowRunFromEngine } from "@/lib/workflows/workflow-runner";
 const ENGINE_JOB_STATUSES: EngineJobStatus[] = [
   "queued",
   "running",
+  "interrupted",
   "completed",
   "failed",
   "cancelled",
@@ -55,6 +57,7 @@ export type EngineJobSummary = {
   kind: EngineJob["kind"];
   status: EngineJobStatus;
   backend: EngineJob["backend"];
+  runtimeLabel?: string;
   projectId?: string;
   taskId?: string;
   workflowRunId?: string;
@@ -67,6 +70,7 @@ export type EngineJobSummary = {
   completedAt?: string;
   logCount: number;
   lastLogMessage?: string;
+  aoWorkerPool?: import("@/lib/engine/ao-worker-pool-types").AoWorkerPoolSnapshot;
 };
 
 export type EngineQueueCounts = Record<EngineJobStatus, number>;
@@ -149,12 +153,30 @@ export type EngineDemoJobResponse = {
 export const summarizeEngineJob = (job: EngineJob): EngineJobSummary => {
   const redactedLogs = job.executionLogs.map(redactEngineLogEntry);
   const lastLog = redactedLogs.at(-1);
+  const aoWorkerPool = readAoWorkerPoolSnapshot(job.result);
+  const executor =
+    job.payload.executor &&
+    typeof job.payload.executor === "object" &&
+    !Array.isArray(job.payload.executor)
+      ? (job.payload.executor as Record<string, unknown>)
+      : undefined;
+  const runtimeLabel =
+    job.payload.nodeType === "agent-orchestrator-implement"
+      ? `Agent Orchestrator · ${
+          executor?.aoAgentPlugin === "cursor"
+            ? "Cursor"
+            : executor?.aoAgentPlugin === "codex"
+              ? "Codex"
+              : "Claude Code"
+        }`
+      : undefined;
 
   return {
     id: job.id,
     kind: job.kind,
     status: job.status,
     backend: job.backend,
+    ...(runtimeLabel ? { runtimeLabel } : {}),
     projectId: job.projectId,
     taskId: job.taskId,
     workflowRunId: job.workflowRunId,
@@ -167,6 +189,7 @@ export const summarizeEngineJob = (job: EngineJob): EngineJobSummary => {
     completedAt: job.completedAt,
     logCount: redactedLogs.length,
     lastLogMessage: lastLog?.message,
+    ...(aoWorkerPool ? { aoWorkerPool } : {}),
   };
 };
 

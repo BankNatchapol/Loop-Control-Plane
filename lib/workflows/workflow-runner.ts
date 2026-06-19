@@ -1,13 +1,22 @@
 import type { LoopBoardRepository } from "@/lib/db/loopboard-repository";
-import { UnsupportedTransitionError, ValidationError } from "@/lib/db/loopboard-repository";
+import {
+  ResumableWorkflowRunError,
+  UnsupportedTransitionError,
+  ValidationError,
+} from "@/lib/db/loopboard-repository";
 import type { EngineJob } from "@/lib/engine/loop-engine-types";
 import { resolveWorkflowNodeExecutorConfig } from "@/lib/engine/workflow-node-config";
-import { resolveWorkflowArtifactPath } from "@/lib/engine/executors/workflow-artifact-paths";
+import { workflowNodeEngineJobBackend } from "@/lib/engine/workflow-node-executor-map";
+import {
+  hasUnresolvedArtifactPlaceholders,
+  resolveWorkflowArtifactPath,
+} from "@/lib/engine/executors/workflow-artifact-paths";
 import {
   isEngineDelegatedWorkflowNode,
   parseWorkflowArtifacts,
 } from "@/lib/engine/executors/workflow-step-types";
 import type {
+  Feature,
   Workflow,
   WorkflowArtifact,
   WorkflowLogEntry,
@@ -24,9 +33,12 @@ export type WorkflowRunAction =
   | "run-next"
   | "run-next-engine"
   | "approve"
+  | "skip"
+  /** @deprecated Kept for compatibility with older clients. */
   | "skip-disabled"
   | "fail"
-  | "resume";
+  | "resume"
+  | "abandon";
 
 export type StartWorkflowRunInput = {
   workflowId: string;
@@ -70,6 +82,145 @@ const appendLog = (
 
 const resolveArtifactPath = resolveWorkflowArtifactPath;
 
+const featureArtifactPath = (
+  feature: Feature | undefined,
+  artifactName: string,
+): string | undefined => {
+  if (!feature) {
+    return undefined;
+  }
+
+  switch (artifactName) {
+    case "feature-brief":
+    case "prd":
+      return feature.prdPath || undefined;
+    case "spec":
+    case "clarified-spec":
+      return feature.specPath || undefined;
+    case "plan":
+      return feature.planPath || undefined;
+    case "tasks":
+      return feature.tasksPath || undefined;
+    case "decisions":
+      return feature.decisionsPath || undefined;
+    case "checklist":
+      return feature.artifactFolderPath
+        ? feature.artifactFolderPath === "."
+          ? "checklist.md"
+          : `${feature.artifactFolderPath.replace(/\/+$/u, "")}/checklist.md`
+        : undefined;
+    default:
+      return undefined;
+  }
+};
+
+const resolveRunArtifact = ({
+  artifact,
+  workflow,
+  run,
+  project,
+  feature,
+  semanticName = artifact.name,
+}: {
+  artifact: WorkflowArtifact;
+  workflow: Workflow;
+  run: WorkflowRun;
+  project: ReturnType<LoopBoardRepository["getProject"]>;
+  feature?: Feature;
+  semanticName?: string;
+}): WorkflowArtifact => {
+  const resolved = resolveArtifactPath({ artifact, workflow, run, project });
+  const linkedPath = featureArtifactPath(feature, semanticName);
+  return linkedPath ? { ...resolved, path: linkedPath } : resolved;
+};
+
+const workflowForRun = (
+  repository: LoopBoardRepository,
+  run: WorkflowRun,
+): Workflow =>
+  run.workflowSnapshot?.nodes?.length
+    ? run.workflowSnapshot
+    : repository.getWorkflow(run.workflowId);
+
+const resolveNodeInputArtifacts = ({
+  workflow,
+  run,
+  node,
+  project,
+  feature,
+}: {
+  workflow: Workflow;
+  run: WorkflowRun;
+  node: WorkflowNode;
+  project: ReturnType<LoopBoardRepository["getProject"]>;
+  feature?: Feature;
+}): WorkflowArtifact[] =>
+  node.inputArtifacts.flatMap((artifact) => {
+    for (const step of [...run.steps].reverse()) {
+      const produced = step.outputArtifacts.find(
+        (candidate) => candidate.name === artifact.name,
+      );
+      if (produced) {
+        return [
+          resolveRunArtifact({
+            artifact: { ...produced, required: artifact.required },
+            workflow,
+            run,
+            project,
+            feature,
+            semanticName: artifact.name,
+          }),
+        ];
+      }
+    }
+    const currentCheckpoint = [...run.steps]
+      .reverse()
+      .find((step) => step.workflowNodeId === node.id)?.checkpoint;
+    const checkpointArtifact = currentCheckpoint?.artifacts?.find(
+      (candidate) => candidate.name === artifact.name,
+    );
+    if (checkpointArtifact) {
+      return [
+        resolveRunArtifact({
+          artifact: { ...checkpointArtifact, required: artifact.required },
+          workflow,
+          run,
+          project,
+          feature,
+          semanticName: artifact.name,
+        }),
+      ];
+    }
+    const runInput = run.inputArtifacts.find(
+      (candidate) => candidate.name === artifact.name,
+    );
+    if (runInput) {
+      return [
+        resolveRunArtifact({
+          artifact: { ...runInput, required: artifact.required },
+          workflow,
+          run,
+          project,
+          feature,
+          semanticName: artifact.name,
+        }),
+      ];
+    }
+    const resolved = resolveRunArtifact({
+      artifact,
+      workflow,
+      run,
+      project,
+      feature,
+    });
+    if (artifact.required && hasUnresolvedArtifactPlaceholders(resolved)) {
+      throw new ValidationError(
+        `Required artifact "${artifact.name}" contains unresolved placeholders: ${resolved.path}`,
+      );
+    }
+    return hasUnresolvedArtifactPlaceholders(resolved) ? [] : [resolved];
+  });
+
 const enqueueEngineDelegatedWorkflowStep = ({
   repository,
   workflow,
@@ -86,18 +237,29 @@ const enqueueEngineDelegatedWorkflowStep = ({
   approvedAt?: string;
 }): WorkflowRun => {
   const now = new Date().toISOString();
-  const attempt = (existingStep?.attempt ?? 0) + 1;
+  const project = repository.getProject(run.projectId);
+  const feature = run.featureId
+    ? repository.getFeature(run.featureId)
+    : undefined;
+  const attempt =
+    existingStep?.status === "waiting-approval"
+      ? existingStep.attempt
+      : (existingStep?.attempt ?? 0) + 1;
   const executorConfig = resolveWorkflowNodeExecutorConfig(node);
-  const inputArtifacts = node.inputArtifacts.map((artifact) =>
-    resolveArtifactPath({ artifact, workflow, run }),
-  );
+  const inputArtifacts = resolveNodeInputArtifacts({
+    workflow,
+    run,
+    node,
+    project,
+    feature,
+  });
   const outputArtifacts = node.outputArtifacts.map((artifact) =>
-    resolveArtifactPath({ artifact, workflow, run }),
+    resolveRunArtifact({ artifact, workflow, run, project, feature }),
   );
 
   const job = repository.createEngineJob({
     kind: "workflow-step",
-    backend: executorConfig.backend,
+    backend: workflowNodeEngineJobBackend(node.type, executorConfig.backend),
     projectId: run.projectId,
     workflowRunId: run.id,
     workflowNodeId: node.id,
@@ -126,10 +288,14 @@ const enqueueEngineDelegatedWorkflowStep = ({
   });
 
   return repository.upsertWorkflowRunStep(run.id, {
-    id: existingStep?.id,
+    id:
+      existingStep?.status === "interrupted" || existingStep?.status === "failed"
+        ? undefined
+        : existingStep?.id,
     workflowNodeId: node.id,
     status: "running",
     attempt,
+    checkpoint: existingStep?.checkpoint,
     inputArtifacts,
     outputArtifacts: [],
     executionLogs: appendLog(
@@ -382,7 +548,7 @@ export const completeWorkflowStepFromEngineJob = ({
     return run;
   }
 
-  const workflow = repository.getWorkflow(run.workflowId);
+  const workflow = workflowForRun(repository, run);
   const node = workflow.nodes.find((candidate) => candidate.id === job.workflowNodeId);
   if (!node) {
     return undefined;
@@ -394,15 +560,30 @@ export const completeWorkflowStepFromEngineJob = ({
   }
 
   const now = new Date().toISOString();
+  const project = repository.getProject(run.projectId);
+  const feature = run.featureId
+    ? repository.getFeature(run.featureId)
+    : undefined;
   const resolvedBranchLabel =
     branchLabel ??
     (typeof job.result?.branchLabel === "string" ? job.result.branchLabel : undefined);
-  const resolvedOutputs =
+  const rawOutputs =
     (outputArtifacts && outputArtifacts.length > 0 ? outputArtifacts : undefined) ??
     parseWorkflowArtifacts(job.result?.outputArtifacts) ??
     node.outputArtifacts.map((artifact) =>
-      resolveArtifactPath({ artifact, workflow, run }),
+      resolveRunArtifact({ artifact, workflow, run, project, feature }),
     );
+  const resolvedOutputs = rawOutputs.map((artifact) =>
+    resolveRunArtifact({ artifact, workflow, run, project, feature }),
+  );
+  const checkpoint = {
+    artifacts:
+      resolvedOutputs.length > 0
+        ? resolvedOutputs
+        : existingStep.checkpoint?.artifacts,
+    state: job.result ?? existingStep.checkpoint?.state,
+    updatedAt: now,
+  };
 
   if (!success) {
     const failureMessage = redact(error ?? job.error ?? "Engine workflow step failed.");
@@ -411,6 +592,7 @@ export const completeWorkflowStepFromEngineJob = ({
       workflowNodeId: node.id,
       status: "failed",
       attempt: existingStep.attempt,
+      checkpoint,
       inputArtifacts: existingStep.inputArtifacts,
       outputArtifacts: existingStep.outputArtifacts,
       executionLogs: appendLog(
@@ -444,6 +626,7 @@ export const completeWorkflowStepFromEngineJob = ({
     workflowNodeId: node.id,
     status: "completed",
     attempt: existingStep.attempt,
+    checkpoint,
     inputArtifacts: existingStep.inputArtifacts,
     outputArtifacts: resolvedOutputs,
     executionLogs: appendLog(
@@ -492,6 +675,15 @@ export const startWorkflowRun = ({
   input: StartWorkflowRunInput;
 }): WorkflowRun => {
   const workflow = repository.getWorkflow(input.workflowId);
+  if (input.featureId) {
+    const existing = repository.getResumableWorkflowRunForFeature(
+      workflow.projectId,
+      input.featureId,
+    );
+    if (existing) {
+      throw new ResumableWorkflowRunError(existing.id);
+    }
+  }
   const currentNodeId = firstRunnableNodeId(workflow);
 
   if (!currentNodeId) {
@@ -505,6 +697,8 @@ export const startWorkflowRun = ({
     featureId: input.featureId,
     status: "running",
     currentNodeId,
+    workflowVersion: workflow.version,
+    workflowSnapshot: workflow,
     inputArtifacts: input.inputArtifacts ?? [],
     executionLogs: [
       logEntry("info", "Workflow run started.", {
@@ -551,8 +745,11 @@ export const runNextWorkflowStep = ({
     );
   }
 
-  const workflow = repository.getWorkflow(run.workflowId);
+  const workflow = workflowForRun(repository, run);
   const project = repository.getProject(run.projectId);
+  const feature = run.featureId
+    ? repository.getFeature(run.featureId)
+    : undefined;
   const node = findCurrentNode(workflow, run);
   const now = new Date().toISOString();
   const existingStep = latestStepForNode(run, node.id);
@@ -600,11 +797,18 @@ export const runNextWorkflowStep = ({
   });
 
   if (policy.kind === "requires-approval" || policy.kind === "deny") {
+    const inputArtifacts = resolveNodeInputArtifacts({
+      workflow,
+      run,
+      node,
+      project,
+      feature,
+    });
     repository.upsertWorkflowRunStep(run.id, {
       workflowNodeId: node.id,
       status: "waiting-approval",
       attempt: (existingStep?.attempt ?? 0) + 1,
-      inputArtifacts: node.inputArtifacts,
+      inputArtifacts,
       outputArtifacts: [],
       executionLogs: stepLogsForNode({ node, action: "is waiting for approval" }),
       requireApproval: true,
@@ -655,14 +859,38 @@ export const runNextWorkflowStep = ({
     });
   }
 
-  const outputArtifacts = node.outputArtifacts.map((artifact) =>
-    resolveArtifactPath({ artifact, workflow, run }),
+  const inputArtifacts = resolveNodeInputArtifacts({
+    workflow,
+    run,
+    node,
+    project,
+    feature,
+  });
+  const branchArtifact = inputArtifacts.find(
+    (artifact) =>
+      artifact.path.startsWith("git://") &&
+      (artifact.name === "manual-patch" ||
+        artifact.name === "implementation-branch"),
   );
+  const outputArtifacts = node.outputArtifacts.map((artifact) => {
+    const resolved = resolveRunArtifact({
+      artifact,
+      workflow,
+      run,
+      project,
+      feature,
+    });
+    return node.type === "manual-claude-code-edit" &&
+      artifact.name === "manual-patch" &&
+      branchArtifact
+      ? { ...resolved, path: branchArtifact.path }
+      : resolved;
+  });
   const steppedRun = repository.upsertWorkflowRunStep(run.id, {
     workflowNodeId: node.id,
     status: "completed",
     attempt: (existingStep?.attempt ?? 0) + 1,
-    inputArtifacts: node.inputArtifacts,
+    inputArtifacts,
     outputArtifacts,
     executionLogs: stepLogsForNode({ node, action: "completed deterministically" }),
     requireApproval: false,
@@ -701,7 +929,11 @@ export const approveWorkflowRunStep = ({
   const run = repository.getWorkflowRun(runId);
   assertActionableRun(run);
 
-  const workflow = repository.getWorkflow(run.workflowId);
+  const workflow = workflowForRun(repository, run);
+  const project = repository.getProject(run.projectId);
+  const feature = run.featureId
+    ? repository.getFeature(run.featureId)
+    : undefined;
   const node = findCurrentNode(workflow, run);
   const step = latestStepForNode(run, node.id);
 
@@ -712,9 +944,33 @@ export const approveWorkflowRunStep = ({
   }
 
   const now = new Date().toISOString();
-  const outputArtifacts = node.outputArtifacts.map((artifact) =>
-    resolveArtifactPath({ artifact, workflow, run }),
+  const inputArtifacts = resolveNodeInputArtifacts({
+    workflow,
+    run,
+    node,
+    project,
+    feature,
+  });
+  const branchArtifact = inputArtifacts.find(
+    (artifact) =>
+      artifact.path.startsWith("git://") &&
+      (artifact.name === "manual-patch" ||
+        artifact.name === "implementation-branch"),
   );
+  const outputArtifacts = node.outputArtifacts.map((artifact) => {
+    const resolved = resolveRunArtifact({
+      artifact,
+      workflow,
+      run,
+      project,
+      feature,
+    });
+    return node.type === "manual-claude-code-edit" &&
+      artifact.name === "manual-patch" &&
+      branchArtifact
+      ? { ...resolved, path: branchArtifact.path }
+      : resolved;
+  });
 
   if (isEngineDelegatedWorkflowNode(node.type)) {
     const delegatedRun = enqueueEngineDelegatedWorkflowStep({
@@ -744,7 +1000,7 @@ export const approveWorkflowRunStep = ({
     workflowNodeId: node.id,
     status: "completed",
     attempt: step.attempt,
-    inputArtifacts: step.inputArtifacts,
+    inputArtifacts,
     outputArtifacts,
     executionLogs: appendLog(
       step.executionLogs,
@@ -780,7 +1036,7 @@ export const approveWorkflowRunStep = ({
   });
 };
 
-export const skipDisabledWorkflowStep = ({
+export const skipWorkflowRunStep = ({
   repository,
   runId,
 }: {
@@ -788,17 +1044,81 @@ export const skipDisabledWorkflowStep = ({
   runId: string;
 }): WorkflowRun => {
   const run = repository.getWorkflowRun(runId);
-  const workflow = repository.getWorkflow(run.workflowId);
-  const node = findCurrentNode(workflow, run);
+  assertActionableRun(run);
 
-  if (node.mode !== "disabled") {
+  if (run.status === "interrupted") {
     throw new UnsupportedTransitionError(
-      "Only disabled workflow nodes can be skipped with this action.",
+      "Resume the interrupted workflow run before skipping its current node.",
     );
   }
 
-  return runNextWorkflowStep({ repository, runId });
+  const workflow = workflowForRun(repository, run);
+  const node = findCurrentNode(workflow, run);
+  const existingStep = latestStepForNode(run, node.id);
+
+  if (existingStep?.status === "running") {
+    throw new UnsupportedTransitionError(
+      "Wait for or cancel the running engine job before skipping this node.",
+    );
+  }
+
+  const activeStep =
+    existingStep?.status === "pending" ||
+    existingStep?.status === "waiting-approval" ||
+    existingStep?.status === "interrupted"
+      ? existingStep
+      : undefined;
+  const project = repository.getProject(run.projectId);
+  const feature = run.featureId
+    ? repository.getFeature(run.featureId)
+    : undefined;
+  const now = new Date().toISOString();
+  const inputArtifacts =
+    activeStep?.inputArtifacts ??
+    resolveNodeInputArtifacts({
+      workflow,
+      run,
+      node,
+      project,
+      feature,
+    });
+  const skippedRun = repository.upsertWorkflowRunStep(run.id, {
+    id: activeStep?.id,
+    workflowNodeId: node.id,
+    status: "skipped",
+    attempt: activeStep?.attempt ?? (existingStep?.attempt ?? 0) + 1,
+    inputArtifacts,
+    outputArtifacts: [],
+    executionLogs: appendLog(
+      activeStep?.executionLogs ?? [],
+      "warn",
+      `${node.name} skipped by the operator.`,
+      { nodeId: node.id, nodeType: node.type },
+    ),
+    error: null,
+    requireApproval: activeStep?.requireApproval ?? node.requireApproval,
+    approvedAt: null,
+    startedAt: activeStep?.startedAt ?? now,
+    completedAt: now,
+    updatedAt: now,
+  });
+
+  return updateAfterNode({
+    repository,
+    workflow,
+    run: skippedRun,
+    node,
+    logs: appendLog(
+      skippedRun.executionLogs,
+      "warn",
+      "Workflow node skipped by the operator.",
+      { nodeId: node.id },
+    ),
+  });
 };
+
+/** @deprecated Use skipWorkflowRunStep. */
+export const skipDisabledWorkflowStep = skipWorkflowRunStep;
 
 export const failWorkflowRunStep = ({
   repository,
@@ -812,7 +1132,7 @@ export const failWorkflowRunStep = ({
   const run = repository.getWorkflowRun(runId);
   assertActionableRun(run);
 
-  const workflow = repository.getWorkflow(run.workflowId);
+  const workflow = workflowForRun(repository, run);
   const node = findCurrentNode(workflow, run);
   const existingStep = latestStepForNode(run, node.id);
   const now = new Date().toISOString();
@@ -848,6 +1168,34 @@ export const failWorkflowRunStep = ({
   });
 };
 
+export const abandonWorkflowRun = ({
+  repository,
+  runId,
+}: {
+  repository: LoopBoardRepository;
+  runId: string;
+}): WorkflowRun => {
+  const run = repository.getWorkflowRun(runId);
+  if (run.status === "completed" || run.status === "cancelled") {
+    throw new UnsupportedTransitionError(
+      `Workflow run "${run.id}" is already ${run.status}.`,
+    );
+  }
+  const now = new Date().toISOString();
+  return repository.updateWorkflowRun(run.id, {
+    status: "cancelled",
+    interruption: null,
+    completedAt: now,
+    executionLogs: appendLog(
+      run.executionLogs,
+      "warn",
+      "Workflow run abandoned by the operator.",
+      { operatorAction: "abandon" },
+    ),
+    updatedAt: now,
+  });
+};
+
 export const resumeWorkflowRun = ({
   repository,
   runId,
@@ -859,10 +1207,12 @@ export const resumeWorkflowRun = ({
   assertActionableRun(run);
 
   if (run.status !== "paused") {
-    throw new UnsupportedTransitionError("Only paused workflow runs can be resumed.");
+    throw new UnsupportedTransitionError(
+      "Only paused workflow runs can use the standard resume action. Interrupted runs must use engine recovery.",
+    );
   }
 
-  const workflow = repository.getWorkflow(run.workflowId);
+  const workflow = workflowForRun(repository, run);
   const node = findCurrentNode(workflow, run);
   const step = latestStepForNode(run, node.id);
 
@@ -874,6 +1224,7 @@ export const resumeWorkflowRun = ({
 
   return repository.updateWorkflowRun(run.id, {
     status: "running",
+    interruption: null,
     executionLogs: appendLog(run.executionLogs, "info", "Workflow run resumed.", {
       nodeId: node.id,
     }),
@@ -888,7 +1239,7 @@ export const runNextWorkflowStepWithEngineTick = async ({
   runId: string;
 }): Promise<WorkflowRun> => {
   const runAfterAdvance = runNextWorkflowStep({ repository, runId });
-  const workflow = repository.getWorkflow(runAfterAdvance.workflowId);
+  const workflow = workflowForRun(repository, runAfterAdvance);
   const node = findCurrentNode(workflow, runAfterAdvance);
   const step = latestStepForNode(runAfterAdvance, node.id);
 
@@ -909,7 +1260,7 @@ export const resumeWorkflowRunFromEngine = async ({
 }): Promise<WorkflowRun> => {
   assertWorkflowRunEngineResumeAllowed(repository, runId);
 
-  const run = repository.getWorkflowRun(runId);
+  let run = repository.getWorkflowRun(runId);
 
   if (run.status === "completed" || run.status === "cancelled") {
     throw new UnsupportedTransitionError(
@@ -917,7 +1268,16 @@ export const resumeWorkflowRunFromEngine = async ({
     );
   }
 
-  const workflow = repository.getWorkflow(run.workflowId);
+  if (!run.workflowSnapshot?.nodes?.length) {
+    const currentWorkflow = repository.getWorkflow(run.workflowId);
+    run = repository.updateWorkflowRun(run.id, {
+      workflowSnapshot: currentWorkflow,
+      workflowVersion: currentWorkflow.version,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  const workflow = workflowForRun(repository, run);
   const node = findCurrentNode(workflow, run);
   const step = latestStepForNode(run, node.id);
 
@@ -929,6 +1289,21 @@ export const resumeWorkflowRunFromEngine = async ({
     }
 
     resumeWorkflowRun({ repository, runId });
+  }
+
+  if (run.status === "interrupted") {
+    run = repository.updateWorkflowRun(run.id, {
+      status: "running",
+      interruption: null,
+      completedAt: null,
+      executionLogs: appendLog(
+        run.executionLogs,
+        "info",
+        "Interrupted workflow run reopened for reconciliation.",
+        { nodeId: node.id, operatorAction: "resume" },
+      ),
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   if (run.status === "failed") {
@@ -985,12 +1360,15 @@ export const applyWorkflowRunAction = ({
       );
     case "approve":
       return approveWorkflowRunStep({ repository, runId });
+    case "skip":
     case "skip-disabled":
-      return skipDisabledWorkflowStep({ repository, runId });
+      return skipWorkflowRunStep({ repository, runId });
     case "fail":
       return failWorkflowRunStep({ repository, runId, error: input.error });
     case "resume":
       return resumeWorkflowRun({ repository, runId });
+    case "abandon":
+      return abandonWorkflowRun({ repository, runId });
     case "start":
       throw new ValidationError("Start workflow runs from the workflow endpoint.");
   }

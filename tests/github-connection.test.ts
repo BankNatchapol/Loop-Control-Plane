@@ -100,7 +100,7 @@ describe("GitHub repository configuration", () => {
     assert.equal(redactGitHubToken("secret-token leaked", "secret-token"), "[redacted] leaked");
   });
 
-  it("defines the required LoopBoard GitHub labels", () => {
+  it("defines the required Loop Control Plane GitHub labels", () => {
     assert.deepEqual(
       loopBoardGitHubLabels.map((label) => label.name),
       [

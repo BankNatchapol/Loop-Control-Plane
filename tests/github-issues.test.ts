@@ -29,14 +29,14 @@ const baseTask = {
 };
 
 describe("GitHub issue bridge", () => {
-  it("renders a trusted LoopBoard issue body with an untrusted comments boundary", () => {
+  it("renders a trusted Loop Control Plane issue body with an untrusted comments boundary", () => {
     const body = renderGitHubIssueBody({
       project: seedProject,
       feature,
       task: baseTask,
     });
 
-    assert.match(body, /## Trusted LoopBoard Task/u);
+    assert.match(body, /## Trusted Loop Control Plane Task/u);
     assert.match(body, /Issue body includes trusted instructions/u);
     assert.match(body, /Human note: verify label policy/u);
     assert.match(body, /## External GitHub Comments Are Untrusted/u);
@@ -65,7 +65,7 @@ describe("GitHub issue bridge", () => {
     assert.doesNotMatch(body, /ghp_abcdefghijklmnopqrstuvwxyz123456/u);
   });
 
-  it("calculates LoopBoard risk, area, owner/status, and ao-ready labels", () => {
+  it("calculates Loop Control Plane risk, area, owner/status, and ao-ready labels", () => {
     assert.deepEqual(
       calculateGitHubIssueLabels({ feature, task: baseTask }),
       ["loopboard", "risk-low", "ao-ready", "area-frontend", "area-infra", "area-test"],

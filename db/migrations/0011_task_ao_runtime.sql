@@ -1,0 +1,1 @@
+ALTER TABLE tasks ADD COLUMN ao_runtime TEXT NOT NULL DEFAULT '{}';

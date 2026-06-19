@@ -12,6 +12,7 @@ import {
   redactSensitiveCommandValue,
   validateLocalDirectory,
 } from "@/lib/system/local-command-runner";
+import { resolveAoCliInvocation } from "@/lib/ao-bridge/ao-cli-path";
 import type { ProjectAutomationPolicy, WorkflowNode } from "@/lib/loopboard";
 
 export type ProcessCommandProfile =
@@ -135,6 +136,7 @@ const ALLOWED_COMMANDS = new Set<string>([
   // Absolute-path fallbacks for when PATH is stripped in IDE-launched servers
   "/opt/homebrew/bin/claude",
   "/usr/local/bin/claude",
+  "node",
 ]);
 
 const BASE_PROCESS_ENV_KEYS = [
@@ -348,6 +350,17 @@ export const resolveProcessProfile = (
       command: absoluteFallback ?? "claude",
       defaultArgs: [],
       placeholder: false,
+    };
+  }
+
+  if (profile === "ao") {
+    const invocation = resolveAoCliInvocation();
+    return {
+      profile,
+      command: invocation.command,
+      defaultArgs: [...invocation.prefixArgs],
+      placeholder: false,
+      discovered: true,
     };
   }
 

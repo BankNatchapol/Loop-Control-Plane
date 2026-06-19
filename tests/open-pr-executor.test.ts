@@ -68,8 +68,26 @@ const withOpenPrFixture = async (
   }
 };
 
+const processResult = (
+  stdout: string,
+  args: string[],
+): ProcessRunResult => ({
+  success: true,
+  exitCode: 0,
+  stdout,
+  stderr: "",
+  stdoutSummary: stdout,
+  stderrSummary: "",
+  timedOut: false,
+  durationMs: 1,
+  commandSummary: `gh ${args.join(" ")}`,
+  profile: "gh",
+  command: "gh",
+  args,
+});
+
 describe("open-pr-executor", () => {
-  it("syncs an existing pull request and marks the output artifact untrusted", async () => {
+  it("reuses only the open pull request whose head matches the integrated branch", async () => {
     await withOpenPrFixture(async ({ repository, featureId, taskId }) => {
       const inputArtifacts: WorkflowArtifact[] = [
         {
@@ -93,23 +111,19 @@ describe("open-pr-executor", () => {
         inputArtifacts,
         outputArtifacts,
         projectRepoPath: repository.getProject("project-pr").repoPath,
-        token: "token",
-        useGhCreateFallback: false,
-        syncPullRequest: async () => ({
-          status: "synced",
-          repository: "bank-p/loop-control-plane",
-          message: "Synced GitHub pull request #7.",
-          syncedAt: "2026-06-16T00:00:00.000Z",
-          github: {
-            issueNumber: undefined,
-            issueUrl: undefined,
-            pullRequestNumber: 7,
-            pullRequestUrl: "https://github.com/bank-p/loop-control-plane/pull/7",
-            pullRequestBranch: "feature/pr-flow",
-            pullRequestState: "open",
-          },
-          linkedIssueNumbers: [],
-        }),
+        processRunner: {
+          run: async ({ args = [] }) =>
+            processResult(
+              JSON.stringify([
+                {
+                  number: 7,
+                  url: "https://github.com/bank-p/loop-control-plane/pull/7",
+                  headRefName: "feature/pr-flow",
+                },
+              ]),
+              args,
+            ),
+        },
       });
 
       assert.equal(result.success, true);
@@ -124,7 +138,7 @@ describe("open-pr-executor", () => {
     });
   });
 
-  it("falls back to gh pr create when discovery does not find a pull request", async () => {
+  it("creates the final PR when branch-matched discovery is empty", async () => {
     await withOpenPrFixture(async ({ repository, featureId, taskId }) => {
       const result = await executeOpenPr({
         repository,
@@ -144,32 +158,14 @@ describe("open-pr-executor", () => {
           },
         ],
         projectRepoPath: repository.getProject("project-pr").repoPath,
-        token: "token",
-        useGhCreateFallback: true,
-        syncPullRequest: async () => ({
-          status: "not-found",
-          repository: "bank-p/loop-control-plane",
-          message: "No linked GitHub pull request was found for this task.",
-          syncedAt: "2026-06-16T00:00:00.000Z",
-          linkedIssueNumbers: [],
-        }),
         processRunner: {
-          run: async () =>
-            ({
-              success: true,
-              exitCode: 0,
-              stdout:
-                "https://github.com/bank-p/loop-control-plane/pull/99\n",
-              stderr: "",
-              stdoutSummary: "https://github.com/bank-p/loop-control-plane/pull/99",
-              stderrSummary: "",
-              timedOut: false,
-              durationMs: 1,
-              commandSummary: "gh pr create",
-              profile: "gh",
-              command: "gh",
-              args: ["pr", "create"],
-            }) satisfies ProcessRunResult,
+          run: async ({ args = [] }) =>
+            args[1] === "list"
+              ? processResult("[]", args)
+              : processResult(
+                  "https://github.com/bank-p/loop-control-plane/pull/99\n",
+                  args,
+                ),
         },
       });
 

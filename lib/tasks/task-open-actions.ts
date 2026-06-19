@@ -133,7 +133,7 @@ export const openTaskPath = (
     runner.launch("code", [target.path]);
   } catch {
     throw new TaskOpenActionError(
-      "LoopBoard could not launch VS Code.",
+      "Loop Control Plane could not launch VS Code.",
       500,
       "task_open_failed",
     );
@@ -152,7 +152,7 @@ export const openTaskPath = (
       target.kind === "worktree"
         ? `Opening ${task.title} worktree in VS Code.`
         : target.usedFallback
-          ? `Task "${task.title}" does not have a worktree path, so LoopBoard is opening the project repository in VS Code.`
+          ? `Task "${task.title}" does not have a worktree path, so Loop Control Plane is opening the project repository in VS Code.`
           : `Opening ${project.name} repository in VS Code.`,
   };
 };

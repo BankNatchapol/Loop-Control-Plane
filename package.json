@@ -4,13 +4,16 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "start": "bash scripts/start-managed.sh",
+    "dev:managed": "bash scripts/dev-managed.sh",
+    "ao:setup": "node scripts/setup-managed-ao.mjs",
     "build": "next build",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx db/migrate.ts",
     "db:seed": "tsx db/seed.ts",
     "contexts:generate": "tsx db/generate-contexts.ts",
     "lint": "eslint .",
-    "test": "node --test --import tsx tests/*.test.ts",
+    "test": "LOOPBOARD_AO_USE_PATH_CLI=1 node --test --import tsx tests/*.test.ts",
     "test:ui": "playwright test",
     "screenshots:readme": "CAPTURE_SCREENSHOTS=1 playwright test readme-screenshots",
     "typecheck": "tsc --noEmit"
@@ -19,6 +22,8 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
     "@xyflow/react": "^12.11.0",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.2",
@@ -26,7 +31,8 @@
     "next": "^15.1.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "roughjs": "^4.6.6"
+    "roughjs": "^4.6.6",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
@@ -35,6 +41,7 @@
     "@types/node": "^22.10.2",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
+    "@types/ws": "^8.5.14",
     "drizzle-kit": "^0.31.10",
     "eslint": "^9.17.0",
     "eslint-config-next": "^15.1.3",

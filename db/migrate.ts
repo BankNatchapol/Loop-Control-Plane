@@ -72,7 +72,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   database.close();
   console.log(
     applied.length === 0
-      ? "LoopBoard database is already migrated."
+      ? "Loop Control Plane database is already migrated."
       : `Applied migrations: ${applied.join(", ")}`,
   );
 }

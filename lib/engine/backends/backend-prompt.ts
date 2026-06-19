@@ -11,6 +11,10 @@ import {
   parseTaskRunJobPayload,
   type EngineJob,
 } from "@/lib/engine/loop-engine-types";
+import { buildSpecKitAgentPrompt } from "@/lib/engine/executors/spec-kit-actions-executor";
+import {
+  parseWorkflowStepJobPayload,
+} from "@/lib/engine/executors/workflow-step-types";
 import { redactSensitiveText } from "@/lib/security/safe-context";
 
 export type ResolvedBackendPrompt = {
@@ -126,6 +130,35 @@ export const resolveBackendPromptForJob = (input: {
 
   const payload = parseTaskRunJobPayload(input.context.job.payload);
   const taskId = input.context.job.taskId ?? payload?.taskId;
+
+  if (input.context.job.kind === "workflow-step") {
+    const workflowPayload = parseWorkflowStepJobPayload(input.context.job.payload);
+    if (workflowPayload?.nodeType === "spec-kit-actions") {
+      const briefArtifact = workflowPayload.inputArtifacts.find((artifact) =>
+        ["feature-brief", "prd"].includes(artifact.name),
+      );
+
+      if (!briefArtifact) {
+        throw new Error("Spec Kit workflow-step prompt requires a feature brief artifact.");
+      }
+
+      return {
+        prompt: buildSpecKitAgentPrompt({
+          backend: input.context.config.backend,
+          actions:
+            input.context.config.args && input.context.config.args.length > 0
+              ? input.context.config.args
+              : ["spec", "plan", "tasks"],
+          briefPath: briefArtifact.path,
+          briefContent: readRepoRelativeFile(
+            input.context.projectRepoPath,
+            briefArtifact.path,
+          ),
+          outputArtifacts: workflowPayload.outputArtifacts,
+        }),
+      };
+    }
+  }
 
   if (taskId) {
     const paths = resolvePromptPathsFromTaskId(taskId, input.contextService);

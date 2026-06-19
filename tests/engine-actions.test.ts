@@ -198,6 +198,31 @@ describe("Loop engine API actions", () => {
     assert.equal(summary.workflowNodeId, "node-import-tasks");
   });
 
+  it("describes the AO worker agent instead of exposing dispatcher transport", () => {
+    const summary = summarizeEngineJob({
+      id: "job-ao-cursor",
+      kind: "workflow-step",
+      status: "queued",
+      backend: "stub",
+      payload: {
+        nodeType: "agent-orchestrator-implement",
+        executor: {
+          backend: "agent-orchestrator",
+          aoAgentPlugin: "cursor",
+        },
+      },
+      executionLogs: [],
+      attempt: 1,
+      maxAttempts: 3,
+      queuedAt: "2026-06-19T02:00:00.000Z",
+      createdAt: "2026-06-19T02:00:00.000Z",
+      updatedAt: "2026-06-19T02:00:00.000Z",
+    });
+
+    assert.equal(summary.backend, "stub");
+    assert.equal(summary.runtimeLabel, "Agent Orchestrator · Cursor");
+  });
+
   it("denies scheduler start when global auto-run is disabled", () => {
     withRepository((repository) => {
       assert.throws(

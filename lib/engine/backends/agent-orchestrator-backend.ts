@@ -19,11 +19,23 @@ import {
   ensureAoReadyHandoff,
   resolveAgentOrchestratorSettings,
   resolveIssueNumbersForExecution,
+  resolveMaxConcurrentWorkers,
   type ResolvedAgentOrchestratorSettings,
 } from "@/lib/engine/backends/agent-orchestrator-config";
+import {
+  buildAoArgs,
+  extractAoSessionId,
+  findSessionForRecord,
+  mapAoSessionStatus,
+  parseAoJsonSessions,
+  type AoSessionJson,
+} from "@/lib/engine/backends/ao-session-status";
+import { runAoWorkerPool } from "@/lib/engine/backends/ao-worker-pool";
+import type { AoSessionRecord } from "@/lib/engine/ao-worker-pool-types";
 import { probeCliAvailabilityForBackend } from "@/lib/engine/backends/cli-availability";
 import { ENGINE_JOB_AWAITING_EXTERNAL_SYNC_KEY } from "@/lib/engine/engine-sync-service";
 import { parseTaskRunJobPayload } from "@/lib/engine/loop-engine-types";
+import { parseWorkflowStepJobPayload } from "@/lib/engine/executors/workflow-step-types";
 import {
   ProcessRunner,
   defaultProcessRunner,
@@ -37,105 +49,21 @@ export type AgentOrchestratorBackendDeps = {
   sleep?: (ms: number) => Promise<void>;
 };
 
-export type AoSessionRecord = {
-  issueNumber: number;
-  sessionId?: string;
-  status?: string;
-  prUrl?: string;
-};
+export type { AoSessionRecord };
 
-type AoJsonEnvelope = {
-  data?: AoSessionJson[];
-  meta?: { hiddenTerminatedCount?: number };
-};
-
-type AoSessionJson = {
-  id?: string;
-  status?: string;
-  issueId?: string | number | null;
-  pr?: { url?: string | null; number?: number | null } | null;
-};
-
-const TERMINAL_SUCCESS_STATUSES = new Set([
-  "done",
-  "merged",
-  "approved",
-  "completed",
-]);
-
-const TERMINAL_FAILURE_STATUSES = new Set([
-  "errored",
-  "error",
-  "ci_failed",
-  "failed",
-  "killed",
-]);
-
-const TERMINAL_CANCELLED_STATUSES = new Set(["terminated", "cleanup", "cancelled"]);
+const activeAoSessionsByJob = new Map<string, Set<string>>();
 
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolveSleep) => {
     setTimeout(resolveSleep, ms);
   });
 
-const parseAoJsonSessions = (stdout: string): AoSessionJson[] => {
-  const trimmed = stdout.trim();
-  if (!trimmed) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(trimmed) as AoJsonEnvelope | AoSessionJson[];
-    if (Array.isArray(parsed)) {
-      return parsed;
-    }
-
-    return Array.isArray(parsed.data) ? parsed.data : [];
-  } catch {
-    return [];
-  }
-};
-
-export const extractAoSessionId = (stdout: string): string | undefined => {
-  const trimmed = stdout.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  const labeledMatch = trimmed.match(/session[:\s]+([A-Za-z0-9._-]+)/iu);
-  if (labeledMatch?.[1]) {
-    return labeledMatch[1];
-  }
-
-  const lines = trimmed
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  return lines.at(-1);
-};
-
-export const mapAoSessionStatus = (
-  status: string | undefined,
-): BackendPollResult["status"] | "running" => {
-  const normalized = (status ?? "").trim().toLowerCase();
-  if (!normalized) {
-    return "running";
-  }
-
-  if (TERMINAL_SUCCESS_STATUSES.has(normalized)) {
-    return "completed";
-  }
-
-  if (TERMINAL_FAILURE_STATUSES.has(normalized)) {
-    return "failed";
-  }
-
-  if (TERMINAL_CANCELLED_STATUSES.has(normalized)) {
-    return "cancelled";
-  }
-
-  return "running";
+export {
+  buildAoArgs,
+  extractAoSessionId,
+  findSessionForRecord,
+  mapAoSessionStatus,
+  parseAoJsonSessions,
 };
 
 export const mapPollStatusToBranchLabel = (
@@ -150,64 +78,6 @@ export const mapPollStatusToBranchLabel = (
   }
 
   return "blocked";
-};
-
-const buildAoArgs = (input: {
-  command: "spawn" | "status" | "send";
-  settings: ResolvedAgentOrchestratorSettings;
-  issueNumber?: number;
-  sessionId?: string;
-  message?: string;
-}): string[] => {
-  const args: string[] = [input.command];
-
-  if (input.command === "spawn") {
-    if (typeof input.issueNumber !== "number") {
-      throw new Error("Agent Orchestrator spawn requires an issue number.");
-    }
-
-    args.push(String(input.issueNumber));
-  }
-
-  if (input.command === "send") {
-    if (!input.sessionId || !input.message) {
-      throw new Error("Agent Orchestrator send requires a session id and message.");
-    }
-
-    args.push(input.sessionId, input.message);
-  }
-
-  if (input.settings.projectId) {
-    args.push("--project", input.settings.projectId);
-  }
-
-  if (input.command === "status") {
-    args.push("--json", "--include-terminated");
-  }
-
-  return args;
-};
-
-const findSessionForRecord = (
-  sessions: AoSessionJson[],
-  record: AoSessionRecord,
-): AoSessionJson | undefined => {
-  if (record.sessionId) {
-    const byId = sessions.find((session) => session.id === record.sessionId);
-    if (byId) {
-      return byId;
-    }
-  }
-
-  const issueToken = String(record.issueNumber);
-  return sessions.find((session) => {
-    const issueId = session.issueId;
-    if (issueId === null || issueId === undefined) {
-      return false;
-    }
-
-    return String(issueId) === issueToken;
-  });
 };
 
 export const pollAoSessionsUntilTerminal = async (input: {
@@ -230,7 +100,7 @@ export const pollAoSessionsUntilTerminal = async (input: {
   while (Date.now() < deadline) {
     const { run, logs: statusLogs } = await runBackendProcessProfile({
       profile: "ao",
-      args: buildAoArgs({ command: "status", settings: input.settings }),
+      args: buildAoArgs({ command: "status", projectId: input.settings.projectId }),
       context: input.context,
       processRunner: input.processRunner,
     });
@@ -294,6 +164,7 @@ export const pollAoSessionsUntilTerminal = async (input: {
   };
 };
 
+/** @deprecated Use runAoWorkerPool instead. */
 export const spawnAoSessionsWithConcurrency = async (input: {
   issueNumbers: number[];
   maxConcurrency: number;
@@ -316,7 +187,7 @@ export const spawnAoSessionsWithConcurrency = async (input: {
       profile: "ao",
       args: buildAoArgs({
         command: "spawn",
-        settings: input.settings,
+        projectId: input.settings.projectId,
         issueNumber,
       }),
       context: input.context,
@@ -369,6 +240,34 @@ const summarizeSessionRecords = (records: AoSessionRecord[]): string => {
   return `${completed}/${records.length} Agent Orchestrator sessions completed.`;
 };
 
+const readRecordedAoSessionIds = (result: Record<string, unknown> | undefined): string[] => {
+  if (!result) {
+    return [];
+  }
+
+  const ids = new Set<string>();
+  if (typeof result.externalSessionId === "string" && result.externalSessionId.trim()) {
+    ids.add(result.externalSessionId.trim());
+  }
+
+  if (Array.isArray(result.sessions)) {
+    for (const value of result.sessions) {
+      if (
+        typeof value === "object" &&
+        value !== null &&
+        typeof (value as { sessionId?: unknown }).sessionId === "string"
+      ) {
+        const sessionId = (value as { sessionId: string }).sessionId.trim();
+        if (sessionId) {
+          ids.add(sessionId);
+        }
+      }
+    }
+  }
+
+  return [...ids];
+};
+
 const resolveProjectForContext = (
   context: BackendExecutionContext,
   repository?: LoopBoardRepository,
@@ -384,6 +283,30 @@ const resolveProjectForContext = (
   }
 
   return repository.getProject(projectId);
+};
+
+const persistPoolSnapshot = (
+  repository: LoopBoardRepository | undefined,
+  jobId: string,
+  snapshot: import("@/lib/engine/ao-worker-pool-types").AoWorkerPoolSnapshot,
+) => {
+  if (!repository) {
+    return;
+  }
+
+  let job;
+  try {
+    job = repository.getEngineJob(jobId);
+  } catch {
+    return;
+  }
+
+  repository.updateEngineJob(jobId, {
+    result: {
+      ...(job.result ?? {}),
+      aoWorkerPool: snapshot,
+    },
+  });
 };
 
 export const createAgentOrchestratorBackendAdapter = (
@@ -482,17 +405,138 @@ export const createAgentOrchestratorBackendAdapter = (
         }
 
         issueNumbers = Array.from(new Set(issueNumbers));
-        const maxConcurrency = context.config.fanOut?.maxConcurrency ?? issueNumbers.length;
+        const maxConcurrentWorkers = resolveMaxConcurrentWorkers(project, context.config);
+        const pollTimeoutMs = context.config.timeoutMs ?? DEFAULT_AO_POLL_TIMEOUT_MS;
 
-        const spawnResult = await spawnAoSessionsWithConcurrency({
+        const spawnIssue = async (issueNumber: number) => {
+          const { run, logs: spawnLogs } = await runBackendProcessProfile({
+            profile: "ao",
+            args: buildAoArgs({
+              command: "spawn",
+              projectId: settings.projectId,
+              issueNumber,
+            }),
+            context,
+            processRunner,
+          });
+          logs.push(...spawnLogs);
+
+          if (!run.success) {
+            return {
+              error: run.stderrSummary || run.stdoutSummary || "spawn failed",
+            };
+          }
+
+          const sessionId = extractAoSessionId(run.stdout);
+          return sessionId ? { sessionId } : {};
+        };
+
+        const pollSessions = async (): Promise<AoSessionJson[]> => {
+          const { run, logs: statusLogs } = await runBackendProcessProfile({
+            profile: "ao",
+            args: buildAoArgs({ command: "status", projectId: settings.projectId }),
+            context,
+            processRunner,
+          });
+          logs.push(...statusLogs);
+          return run.success ? parseAoJsonSessions(run.stdout) : [];
+        };
+
+        if (!isFanOut) {
+          const issueNumber = issueNumbers[0]!;
+          const spawnResult = await spawnIssue(issueNumber);
+          const records: AoSessionRecord[] = [
+            {
+              issueNumber,
+              ...(spawnResult.sessionId ? { sessionId: spawnResult.sessionId } : {}),
+              status: spawnResult.error ? "failed" : "spawning",
+            },
+          ];
+
+          if (spawnResult.error && !spawnResult.sessionId) {
+            return {
+              success: false,
+              error: spawnResult.error,
+              errorCode: "ao_spawn_failed",
+              logs,
+            };
+          }
+
+          const snapshot = {
+            maxWorkers: maxConcurrentWorkers > 0 ? maxConcurrentWorkers : 0,
+            updatedAt: new Date().toISOString(),
+            items: [
+              {
+                issueNumber,
+                state: "running" as const,
+                ...(spawnResult.sessionId ? { sessionId: spawnResult.sessionId } : {}),
+              },
+            ],
+          };
+          persistPoolSnapshot(deps.repository, context.job.id, snapshot);
+
+          activeAoSessionsByJob.set(
+            context.job.id,
+            new Set(
+              records
+                .map((record) => record.sessionId)
+                .filter((sessionId): sessionId is string => Boolean(sessionId)),
+            ),
+          );
+
+          const externalSessionId = records[0]?.sessionId;
+          const summary = `Spawned Agent Orchestrator session for issue #${issueNumber}.`;
+
+          logs.push(
+            backendLogEntry("info", "Agent Orchestrator handoff deferred to engine sync.", {
+              issueNumber,
+              ...(externalSessionId ? { sessionId: externalSessionId } : {}),
+            }),
+          );
+
+          return {
+            success: true,
+            externalSessionId,
+            stdoutSummary: summary,
+            result: {
+              [ENGINE_JOB_AWAITING_EXTERNAL_SYNC_KEY]: true,
+              branchLabel: "running",
+              externalSessionId,
+              sessions: records,
+              aoWorkerPool: snapshot,
+              untrusted: true,
+              pollStartedAt: new Date().toISOString(),
+            },
+            logs,
+          };
+        }
+
+        const poolResult = await runAoWorkerPool({
           issueNumbers,
-          maxConcurrency,
-          context,
-          settings,
-          processRunner,
+          maxConcurrentWorkers,
+          timeoutMs: pollTimeoutMs,
+          pollIntervalMs: settings.pollIntervalMs,
+          ...(deps.sleep ? { sleep: deps.sleep } : {}),
+          onSnapshot: (snapshot) => persistPoolSnapshot(deps.repository, context.job.id, snapshot),
+          spawnOne: spawnIssue,
+          pollSessions,
         });
 
-        logs.push(...spawnResult.logs);
+        logs.push(...poolResult.logs);
+
+        const spawnResult = {
+          records: poolResult.records,
+          spawnFailures: poolResult.spawnFailures,
+        };
+
+        activeAoSessionsByJob.set(
+          context.job.id,
+          new Set(
+            spawnResult.records
+              .map((record) => record.sessionId)
+              .filter((sessionId): sessionId is string => Boolean(sessionId)),
+          ),
+        );
 
         if (spawnResult.records.length === 0) {
           return {
@@ -506,47 +550,7 @@ export const createAgentOrchestratorBackendAdapter = (
         const primarySession = spawnResult.records[0];
         const externalSessionId = primarySession?.sessionId;
 
-        if (!isFanOut) {
-          const summary = primarySession
-            ? `Spawned Agent Orchestrator session for issue #${primarySession.issueNumber}.`
-            : "Spawned Agent Orchestrator session.";
-
-          logs.push(
-            backendLogEntry("info", "Agent Orchestrator handoff deferred to engine sync.", {
-              issueNumber: primarySession?.issueNumber,
-              ...(externalSessionId ? { sessionId: externalSessionId } : {}),
-            }),
-          );
-
-          return {
-            success: true,
-            externalSessionId,
-            stdoutSummary: summary,
-            result: {
-              [ENGINE_JOB_AWAITING_EXTERNAL_SYNC_KEY]: true,
-              branchLabel: "running",
-              externalSessionId,
-              sessions: spawnResult.records,
-              untrusted: true,
-              pollStartedAt: new Date().toISOString(),
-            },
-            logs,
-          };
-        }
-
-        const pollTimeoutMs = context.config.timeoutMs ?? DEFAULT_AO_POLL_TIMEOUT_MS;
-        const pollResult = await pollAoSessionsUntilTerminal({
-          records: spawnResult.records,
-          context,
-          settings,
-          processRunner,
-          timeoutMs: pollTimeoutMs,
-          ...(deps.sleep ? { sleep: deps.sleep } : {}),
-        });
-
-        logs.push(...pollResult.logs);
-
-        const sessionStatuses = pollResult.records.map((record) =>
+        const sessionStatuses = poolResult.records.map((record) =>
           mapAoSessionStatus(record.status),
         );
         const allCompleted = sessionStatuses.every((status) => status === "completed");
@@ -554,8 +558,8 @@ export const createAgentOrchestratorBackendAdapter = (
           (status) => status === "failed" || status === "cancelled",
         );
 
-        const polledPrimarySession = pollResult.records[0];
-        const aggregateStatus: BackendPollResult["status"] = pollResult.timedOut
+        const polledPrimarySession = poolResult.records[0];
+        const aggregateStatus: BackendPollResult["status"] = poolResult.timedOut
           ? "failed"
           : allCompleted
             ? "completed"
@@ -563,14 +567,14 @@ export const createAgentOrchestratorBackendAdapter = (
               ? "failed"
               : "running";
 
-        const summary = pollResult.timedOut
+        const summary = poolResult.timedOut
           ? "Agent Orchestrator poll exceeded timeout; external sessions remain running."
-          : summarizeSessionRecords(pollResult.records);
+          : summarizeSessionRecords(poolResult.records);
 
         const branchLabel = mapPollStatusToBranchLabel(aggregateStatus);
         const polledExternalSessionId = polledPrimarySession?.sessionId;
 
-        if (pollResult.timedOut) {
+        if (poolResult.timedOut) {
           return {
             success: false,
             error: summary,
@@ -580,7 +584,8 @@ export const createAgentOrchestratorBackendAdapter = (
             result: {
               branchLabel: "blocked",
               externalSessionId: polledExternalSessionId,
-              sessions: pollResult.records,
+              sessions: poolResult.records,
+              aoWorkerPool: poolResult.snapshot,
               pollTimedOut: true,
               untrusted: true,
             },
@@ -598,11 +603,12 @@ export const createAgentOrchestratorBackendAdapter = (
             result: {
               branchLabel,
               externalSessionId: polledExternalSessionId,
-              sessions: pollResult.records,
+              sessions: poolResult.records,
+              aoWorkerPool: poolResult.snapshot,
               untrusted: true,
-              ...(pollResult.records.find((record) => record.prUrl)?.prUrl
+              ...(poolResult.records.find((record) => record.prUrl)?.prUrl
                 ? {
-                    prUrl: pollResult.records.find((record) => record.prUrl)?.prUrl,
+                    prUrl: poolResult.records.find((record) => record.prUrl)?.prUrl,
                   }
                 : {}),
             },
@@ -617,10 +623,11 @@ export const createAgentOrchestratorBackendAdapter = (
           result: {
             branchLabel,
             externalSessionId: polledExternalSessionId,
-            sessions: pollResult.records,
+            sessions: poolResult.records,
+            aoWorkerPool: poolResult.snapshot,
             untrusted: true,
-            ...(pollResult.records.find((record) => record.prUrl)?.prUrl
-              ? { prUrl: pollResult.records.find((record) => record.prUrl)?.prUrl }
+            ...(poolResult.records.find((record) => record.prUrl)?.prUrl
+              ? { prUrl: poolResult.records.find((record) => record.prUrl)?.prUrl }
               : {}),
           },
           logs,
@@ -642,8 +649,57 @@ export const createAgentOrchestratorBackendAdapter = (
       }
     },
 
-    async cancel(): Promise<void> {
-      // AO sessions keep running externally by default; do not kill on cancel.
+    async cancel(jobId: string): Promise<void> {
+      const trackedIds = activeAoSessionsByJob.get(jobId) ?? new Set<string>();
+      let job;
+      try {
+        job = deps.repository?.getEngineJob(jobId);
+      } catch {
+        job = undefined;
+      }
+
+      for (const sessionId of readRecordedAoSessionIds(job?.result)) {
+        trackedIds.add(sessionId);
+      }
+
+      if (!job || trackedIds.size === 0) {
+        activeAoSessionsByJob.delete(jobId);
+        return;
+      }
+
+      const taskPayload = parseTaskRunJobPayload(job.payload);
+      const workflowPayload = parseWorkflowStepJobPayload(job.payload);
+      const config = taskPayload?.executorConfig ?? workflowPayload?.executor;
+      const projectId = job.projectId ?? taskPayload?.projectId;
+      if (!config || !projectId || !deps.repository) {
+        throw new Error("Agent Orchestrator cancellation requires persisted project and executor context.");
+      }
+
+      const project = deps.repository.getProject(projectId);
+      const context: BackendExecutionContext = {
+        job,
+        config,
+        projectRepoPath: project.repoPath,
+        cwd: project.repoPath,
+      };
+      const failures: string[] = [];
+
+      for (const sessionId of trackedIds) {
+        const { run } = await runBackendProcessProfile({
+          profile: "ao",
+          args: ["session", "kill", sessionId],
+          context,
+          processRunner,
+        });
+        if (!run.success) {
+          failures.push(`${sessionId}: ${run.stderrSummary || run.stdoutSummary || "kill failed"}`);
+        }
+      }
+
+      activeAoSessionsByJob.delete(jobId);
+      if (failures.length > 0) {
+        throw new Error(`Failed to cancel Agent Orchestrator session(s): ${failures.join("; ")}`);
+      }
     },
 
     async poll(job, pollContext: BackendPollContext): Promise<BackendPollResult> {
@@ -680,7 +736,7 @@ export const createAgentOrchestratorBackendAdapter = (
 
       const { run } = await runBackendProcessProfile({
         profile: "ao",
-        args: buildAoArgs({ command: "status", settings }),
+        args: buildAoArgs({ command: "status", projectId: settings.projectId }),
         context: {
           job,
           config: pollContext.config,
@@ -724,6 +780,8 @@ export const createAgentOrchestratorBackendAdapter = (
         };
       }
 
+      activeAoSessionsByJob.delete(job.id);
+
       return {
         status: mapped,
         summary: summarizeSessionRecords([
@@ -758,7 +816,7 @@ export const sendAoSessionMessage = async (input: {
     profile: "ao",
     args: buildAoArgs({
       command: "send",
-      settings: input.settings,
+      projectId: input.settings.projectId,
       sessionId: input.sessionId,
       message: input.message,
     }),

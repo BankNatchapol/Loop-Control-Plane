@@ -12,6 +12,9 @@ import { applyMigrations, openLoopBoardDatabase } from "./migrate";
 
 const json = (value: unknown): string => JSON.stringify(value);
 
+const hoursAgoIso = (hours: number): string =>
+  new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+
 export const seedDatabase = (database: DatabaseSync): void => {
   database.exec("PRAGMA foreign_keys = ON; BEGIN;");
 
@@ -117,9 +120,9 @@ export const seedDatabase = (database: DatabaseSync): void => {
       INSERT INTO tasks (
         id, project_id, feature_id, title, description, status, owner, mode,
         risk, source, labels, acceptance_criteria, dependencies, branch,
-        worktree, github, handoff, created_at, updated_at
+        worktree, github, handoff, ao_runtime, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         project_id = excluded.project_id,
         feature_id = excluded.feature_id,
@@ -137,6 +140,7 @@ export const seedDatabase = (database: DatabaseSync): void => {
         worktree = excluded.worktree,
         github = excluded.github,
         handoff = excluded.handoff,
+        ao_runtime = excluded.ao_runtime,
         created_at = excluded.created_at,
         updated_at = excluded.updated_at
     `);
@@ -160,6 +164,7 @@ export const seedDatabase = (database: DatabaseSync): void => {
         task.worktree,
         json(task.github),
         json(task.handoff),
+        json(task.aoRuntime ?? {}),
         task.createdAt,
         task.updatedAt,
       );
@@ -244,15 +249,16 @@ export const seedDatabase = (database: DatabaseSync): void => {
 
     const workflowEdgeStatement = database.prepare(`
       INSERT INTO workflow_edges (
-        id, workflow_id, source_node_id, target_node_id, label, condition,
+        id, workflow_id, source_node_id, target_node_id, label, dashed, condition,
         created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         workflow_id = excluded.workflow_id,
         source_node_id = excluded.source_node_id,
         target_node_id = excluded.target_node_id,
         label = excluded.label,
+        dashed = excluded.dashed,
         condition = excluded.condition,
         created_at = excluded.created_at,
         updated_at = excluded.updated_at
@@ -297,6 +303,7 @@ export const seedDatabase = (database: DatabaseSync): void => {
           edge.sourceNodeId,
           edge.targetNodeId,
           edge.label,
+          edge.dashed ? 1 : 0,
           json(edge.condition),
           edge.createdAt,
           edge.updatedAt,
@@ -343,7 +350,7 @@ export const seedDatabase = (database: DatabaseSync): void => {
         json({ ok: true, stdoutSummary: "[redacted] stub completed deterministically" }),
         json([
           {
-            timestamp: "2026-06-15T18:00:00.000Z",
+            timestamp: hoursAgoIso(1),
             level: "info",
             message: "Stub executor completed demo-ping deterministically.",
           },
@@ -351,11 +358,11 @@ export const seedDatabase = (database: DatabaseSync): void => {
         null,
         "1",
         "3",
-        "2026-06-15T18:00:00.000Z",
-        "2026-06-15T18:00:01.000Z",
-        "2026-06-15T18:00:02.000Z",
-        "2026-06-15T18:00:00.000Z",
-        "2026-06-15T18:00:02.000Z",
+        hoursAgoIso(1),
+        hoursAgoIso(1),
+        hoursAgoIso(1),
+        hoursAgoIso(1),
+        hoursAgoIso(1),
       );
 
     database.exec("COMMIT;");

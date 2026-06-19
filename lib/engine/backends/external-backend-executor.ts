@@ -2,7 +2,10 @@ import { TaskContextService } from "@/lib/context/task-context-service";
 import type { LoopBoardRepository } from "@/lib/db/loopboard-repository";
 import type { BackendAdapter } from "@/lib/engine/backends/backend-adapter";
 import { buildBackendExecutionContext } from "@/lib/engine/backends/backend-adapter";
-import { backendResultToExecutorResult } from "@/lib/engine/backends/backend-common";
+import {
+  backendLogEntry,
+  backendResultToExecutorResult,
+} from "@/lib/engine/backends/backend-common";
 import { createAgentOrchestratorBackendAdapter } from "@/lib/engine/backends/agent-orchestrator-backend";
 import {
   createClaudeCodeBackendAdapter,
@@ -15,6 +18,8 @@ import {
   type ExecutorBackend,
 } from "@/lib/engine/loop-engine-types";
 import type { Executor, ExecutorContext, ExecutorResult } from "@/lib/engine/executor-registry";
+import { verifySpecKitOutputArtifacts } from "@/lib/engine/executors/spec-kit-actions-executor";
+import { parseWorkflowStepJobPayload } from "@/lib/engine/executors/workflow-step-types";
 import { executeTaskRunJob } from "@/lib/engine/task-run-executor";
 
 export type ExternalBackendExecutorDeps = {
@@ -58,9 +63,53 @@ export class ExternalBackendExecutor implements Executor {
       });
     }
 
-    const result = await this.adapter.execute(
-      this.buildExecutionContext(context, context.config),
-    );
+    const executionContext = this.buildExecutionContext(context, context.config);
+    const result = await this.adapter.execute(executionContext);
+
+    if (context.job.kind === "workflow-step") {
+      const payload = parseWorkflowStepJobPayload(context.job.payload);
+      if (payload?.nodeType === "spec-kit-actions" && result.success) {
+        const verification = verifySpecKitOutputArtifacts({
+          projectRepoPath: executionContext.projectRepoPath,
+          outputArtifacts: payload.outputArtifacts,
+        });
+
+        if (!verification.ok) {
+          const missing = verification.missing.map((artifact) => artifact.path);
+
+          return backendResultToExecutorResult({
+            ...result,
+            success: false,
+            error: `Spec Kit agent backend completed, but required outputs are missing: ${missing.join(", ")}.`,
+            errorCode: "spec_kit_output_missing",
+            result: {
+              ...(result.result ?? {}),
+              missingOutputs: missing,
+            },
+            logs: [
+              ...result.logs,
+              backendLogEntry("error", "Spec Kit required outputs are missing.", {
+                missingOutputs: missing.join(", "),
+              }),
+            ],
+          });
+        }
+
+        return backendResultToExecutorResult({
+          ...result,
+          result: {
+            ...(result.result ?? {}),
+            outputArtifacts: verification.outputArtifacts,
+          },
+          logs: [
+            ...result.logs,
+            backendLogEntry("info", "Spec Kit output artifacts verified.", {
+              outputArtifacts: verification.outputArtifacts.length,
+            }),
+          ],
+        });
+      }
+    }
 
     return backendResultToExecutorResult(result);
   }

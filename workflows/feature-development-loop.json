@@ -1,0 +1,604 @@
+{
+  "id": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+  "projectId": "project-4d2839f4-5979-41d4-8b15-d5903d3d990f",
+  "name": "Feature Development Loop",
+  "description": "PRD-aligned feature workflow from human intake through Spec Kit artifacts, task import, AI implementation, review, pull request, and merge.",
+  "version": 1,
+  "nodes": [
+    {
+      "id": "a6c7de72-adce-414a-b1ca-5e771915bffc",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "type": "human-input",
+      "name": "Human Input",
+      "mode": "human",
+      "position": {
+        "x": 0,
+        "y": 120
+      },
+      "inputArtifacts": [],
+      "outputArtifacts": [
+        {
+          "name": "feature-brief",
+          "path": "specs/{feature}/PRD.md",
+          "required": true
+        }
+      ],
+      "requireApproval": true,
+      "maxRetries": 0,
+      "riskPolicy": "manual-only",
+      "config": {},
+      "currentState": "idle",
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "961cd90a-a99b-44b4-be45-fd71d15e4182",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "type": "spec-kit-actions",
+      "name": "Spec Kit Actions",
+      "mode": "semi",
+      "position": {
+        "x": 260,
+        "y": 120
+      },
+      "inputArtifacts": [
+        {
+          "name": "feature-brief",
+          "path": "specs/{feature}/PRD.md",
+          "required": true
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "spec",
+          "path": "specs/{feature}/spec.md",
+          "required": true
+        },
+        {
+          "name": "plan",
+          "path": "specs/{feature}/plan.md",
+          "required": true
+        },
+        {
+          "name": "tasks",
+          "path": "specs/{feature}/tasks.md",
+          "required": true
+        },
+        {
+          "name": "checklist",
+          "path": "specs/{feature}/checklist.md",
+          "required": false
+        }
+      ],
+      "requireApproval": true,
+      "maxRetries": 1,
+      "riskPolicy": "medium",
+      "config": {},
+      "currentState": "idle",
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "35aadd4a-6565-4c40-8efe-31befa47ce08",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "type": "spec-kit-clarify",
+      "name": "Spec Kit Clarify",
+      "mode": "human",
+      "position": {
+        "x": 520,
+        "y": 120
+      },
+      "inputArtifacts": [
+        {
+          "name": "spec",
+          "path": "specs/{feature}/spec.md",
+          "required": true
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "clarified-spec",
+          "path": "specs/{feature}/spec.md",
+          "required": true
+        }
+      ],
+      "requireApproval": true,
+      "maxRetries": 0,
+      "riskPolicy": "manual-only",
+      "config": {},
+      "currentState": "idle",
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "ea58c0f1-737a-4722-87ba-a1e465cbe371",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "type": "human-review",
+      "name": "Human Review",
+      "mode": "human",
+      "position": {
+        "x": 780,
+        "y": 120
+      },
+      "inputArtifacts": [
+        {
+          "name": "spec",
+          "path": "specs/{feature}/spec.md",
+          "required": true
+        },
+        {
+          "name": "plan",
+          "path": "specs/{feature}/plan.md",
+          "required": true
+        },
+        {
+          "name": "tasks",
+          "path": "specs/{feature}/tasks.md",
+          "required": true
+        },
+        {
+          "name": "checklist",
+          "path": "specs/{feature}/checklist.md",
+          "required": false
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "approved-artifacts",
+          "path": "loopboard://feature/{feature}/approvals",
+          "required": true
+        }
+      ],
+      "requireApproval": true,
+      "maxRetries": 0,
+      "riskPolicy": "manual-only",
+      "config": {},
+      "currentState": "idle",
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "cc95abec-e69e-4aa9-98bc-ea4990f415d7",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "type": "import-tasks",
+      "name": "Import Tasks",
+      "mode": "semi",
+      "position": {
+        "x": 1040,
+        "y": 120
+      },
+      "inputArtifacts": [
+        {
+          "name": "tasks",
+          "path": "specs/{feature}/tasks.md",
+          "required": true
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "loopboard-tasks",
+          "path": "loopboard://feature/{feature}/tasks",
+          "required": true
+        }
+      ],
+      "requireApproval": true,
+      "maxRetries": 1,
+      "riskPolicy": "low",
+      "config": {},
+      "currentState": "idle",
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "f3ec092c-8d81-4c80-9891-4ee9bb47191e",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "type": "create-github-issues",
+      "name": "Create GitHub Issues",
+      "mode": "semi",
+      "position": {
+        "x": 1300,
+        "y": 120
+      },
+      "inputArtifacts": [
+        {
+          "name": "loopboard-tasks",
+          "path": "loopboard://feature/{feature}/tasks",
+          "required": true
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "github-issues",
+          "path": "https://github.com/{repository}/issues",
+          "required": true
+        }
+      ],
+      "requireApproval": true,
+      "maxRetries": 1,
+      "riskPolicy": "medium",
+      "config": {},
+      "currentState": "idle",
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "7aac62b3-a0d2-4efe-8f4a-4fbf4013faac",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "type": "agent-orchestrator-implement",
+      "name": "AO Implement",
+      "mode": "auto",
+      "position": {
+        "x": 1560,
+        "y": 120
+      },
+      "inputArtifacts": [
+        {
+          "name": "github-issues",
+          "path": "https://github.com/{repository}/issues",
+          "required": true
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "implementation-branch",
+          "path": "git://{repository}/{branch}",
+          "required": true
+        }
+      ],
+      "requireApproval": false,
+      "maxRetries": 2,
+      "riskPolicy": "medium",
+      "config": {},
+      "currentState": "idle",
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "09ae2735-5ddd-43f2-926d-fe5c18fd4e35",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "type": "manual-claude-code-edit",
+      "name": "Manual Claude Code Edit",
+      "mode": "human",
+      "position": {
+        "x": 1820,
+        "y": 0
+      },
+      "inputArtifacts": [
+        {
+          "name": "implementation-branch",
+          "path": "git://{repository}/{branch}",
+          "required": false
+        },
+        {
+          "name": "test-report",
+          "path": "loopboard://runs/{run}/test-report",
+          "required": false
+        },
+        {
+          "name": "review-comments",
+          "path": "loopboard://runs/{run}/review-comments",
+          "required": false
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "manual-patch",
+          "path": "git://{repository}/{branch}",
+          "required": true
+        }
+      ],
+      "requireApproval": true,
+      "maxRetries": 0,
+      "riskPolicy": "manual-only",
+      "config": {
+        "optional": true
+      },
+      "currentState": "idle",
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "11b7158b-a3ab-4ab1-8680-4b685ebbc76a",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "type": "run-tests",
+      "name": "Run Tests",
+      "mode": "auto",
+      "position": {
+        "x": 1820,
+        "y": 360
+      },
+      "inputArtifacts": [
+        {
+          "name": "manual-patch",
+          "path": "git://{repository}/{branch}",
+          "required": false
+        },
+        {
+          "name": "implementation-branch",
+          "path": "git://{repository}/{branch}",
+          "required": false
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "test-report",
+          "path": "loopboard://runs/{run}/test-report",
+          "required": true
+        }
+      ],
+      "requireApproval": true,
+      "maxRetries": 2,
+      "riskPolicy": "low",
+      "config": {},
+      "currentState": "idle",
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "c97624e8-f2fc-46ad-a37f-65e8c15d1b1f",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "type": "open-pr",
+      "name": "Open PR",
+      "mode": "semi",
+      "position": {
+        "x": 2080,
+        "y": 360
+      },
+      "inputArtifacts": [
+        {
+          "name": "manual-patch",
+          "path": "git://{repository}/{branch}",
+          "required": false
+        },
+        {
+          "name": "implementation-branch",
+          "path": "git://{repository}/{branch}",
+          "required": false
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "pull-request",
+          "path": "https://github.com/{repository}/pulls",
+          "required": true
+        }
+      ],
+      "requireApproval": true,
+      "maxRetries": 1,
+      "riskPolicy": "medium",
+      "config": {},
+      "currentState": "idle",
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "487fe955-c5ed-4c82-ab95-10d811e904f0",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "type": "pr-review-agent",
+      "name": "PR Agent",
+      "mode": "auto",
+      "position": {
+        "x": 2340,
+        "y": 360
+      },
+      "inputArtifacts": [
+        {
+          "name": "pull-request",
+          "path": "https://github.com/{repository}/pulls",
+          "required": true
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "review-comments",
+          "path": "loopboard://runs/{run}/review-comments",
+          "required": true
+        }
+      ],
+      "requireApproval": false,
+      "maxRetries": 1,
+      "riskPolicy": "medium",
+      "config": {},
+      "currentState": "idle",
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "d409f9a9-e9f5-4cea-a1ff-0d037e15b408",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "type": "merge",
+      "name": "Merge",
+      "mode": "human",
+      "position": {
+        "x": 2600,
+        "y": 0
+      },
+      "inputArtifacts": [
+        {
+          "name": "pull-request",
+          "path": "https://github.com/{repository}/pulls",
+          "required": true
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "merged-branch",
+          "path": "git://{repository}/{defaultBranch}",
+          "required": true
+        }
+      ],
+      "requireApproval": true,
+      "maxRetries": 0,
+      "riskPolicy": "manual-only",
+      "config": {},
+      "currentState": "idle",
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    }
+  ],
+  "edges": [
+    {
+      "id": "9bb235b8-480c-42cd-b8ba-f2c6317fd830",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "sourceNodeId": "a6c7de72-adce-414a-b1ca-5e771915bffc",
+      "targetNodeId": "961cd90a-a99b-44b4-be45-fd71d15e4182",
+      "label": "next",
+      "condition": {},
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "046efcaa-9cc2-4f26-8c70-4977520bf895",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "sourceNodeId": "961cd90a-a99b-44b4-be45-fd71d15e4182",
+      "targetNodeId": "35aadd4a-6565-4c40-8efe-31befa47ce08",
+      "label": "next",
+      "condition": {},
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "d7dee492-f23a-4054-9118-64b85ed53807",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "sourceNodeId": "35aadd4a-6565-4c40-8efe-31befa47ce08",
+      "targetNodeId": "ea58c0f1-737a-4722-87ba-a1e465cbe371",
+      "label": "approved",
+      "condition": {},
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "eaf7259b-aee3-46b2-be7d-bb48b55d10c6",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "sourceNodeId": "35aadd4a-6565-4c40-8efe-31befa47ce08",
+      "targetNodeId": "961cd90a-a99b-44b4-be45-fd71d15e4182",
+      "label": "needs more",
+      "dashed": true,
+      "condition": {},
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "b775607a-84ea-4b30-9eaf-8b3361eba1fc",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "sourceNodeId": "ea58c0f1-737a-4722-87ba-a1e465cbe371",
+      "targetNodeId": "cc95abec-e69e-4aa9-98bc-ea4990f415d7",
+      "label": "next",
+      "condition": {},
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "566ba93e-28cd-444a-b138-24a299892a54",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "sourceNodeId": "cc95abec-e69e-4aa9-98bc-ea4990f415d7",
+      "targetNodeId": "f3ec092c-8d81-4c80-9891-4ee9bb47191e",
+      "label": "next",
+      "condition": {},
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "99efe51d-c353-44b2-bd1a-231c061b3448",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "sourceNodeId": "f3ec092c-8d81-4c80-9891-4ee9bb47191e",
+      "targetNodeId": "7aac62b3-a0d2-4efe-8f4a-4fbf4013faac",
+      "label": "next",
+      "condition": {},
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "6323b6f3-762f-49ef-a9d2-6dcd183dd92f",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "sourceNodeId": "7aac62b3-a0d2-4efe-8f4a-4fbf4013faac",
+      "targetNodeId": "09ae2735-5ddd-43f2-926d-fe5c18fd4e35",
+      "label": "next",
+      "sourceHandle": "right",
+      "targetHandle": "left",
+      "condition": {},
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "668a356a-cfbd-4d35-8984-1c070aa4de54",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "sourceNodeId": "09ae2735-5ddd-43f2-926d-fe5c18fd4e35",
+      "targetNodeId": "11b7158b-a3ab-4ab1-8680-4b685ebbc76a",
+      "label": "next",
+      "sourceHandle": "bottom",
+      "targetHandle": "top",
+      "condition": {},
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "f33e0a81-23e6-46a7-b460-4682a2cf515e",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "sourceNodeId": "11b7158b-a3ab-4ab1-8680-4b685ebbc76a",
+      "targetNodeId": "c97624e8-f2fc-46ad-a37f-65e8c15d1b1f",
+      "label": "passed",
+      "sourceHandle": "right",
+      "targetHandle": "left",
+      "condition": {},
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "b8e47352-6067-4922-b730-7c6e23513d15",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "sourceNodeId": "11b7158b-a3ab-4ab1-8680-4b685ebbc76a",
+      "targetNodeId": "09ae2735-5ddd-43f2-926d-fe5c18fd4e35",
+      "label": "failed",
+      "dashed": true,
+      "sourceHandle": "left",
+      "targetHandle": "left",
+      "condition": {},
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "e720062e-e790-495f-83d0-e75142377bc9",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "sourceNodeId": "c97624e8-f2fc-46ad-a37f-65e8c15d1b1f",
+      "targetNodeId": "487fe955-c5ed-4c82-ab95-10d811e904f0",
+      "label": "next",
+      "sourceHandle": "right",
+      "targetHandle": "left",
+      "condition": {},
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "600b63be-5cbd-4a0d-8a86-05bfa9fc59cd",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "sourceNodeId": "487fe955-c5ed-4c82-ab95-10d811e904f0",
+      "targetNodeId": "d409f9a9-e9f5-4cea-a1ff-0d037e15b408",
+      "label": "approved",
+      "sourceHandle": "top",
+      "targetHandle": "bottom",
+      "condition": {},
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    },
+    {
+      "id": "c8a62ad6-6b60-4704-b070-d0e124fa8b12",
+      "workflowId": "workflow-e8239c20-d1ec-425f-9ec8-6d61e1bf99a8",
+      "sourceNodeId": "487fe955-c5ed-4c82-ab95-10d811e904f0",
+      "targetNodeId": "09ae2735-5ddd-43f2-926d-fe5c18fd4e35",
+      "label": "needs changes",
+      "dashed": true,
+      "sourceHandle": "top",
+      "targetHandle": "right",
+      "condition": {},
+      "createdAt": "2026-06-18T14:58:39.278Z",
+      "updatedAt": "2026-06-18T14:58:39.278Z"
+    }
+  ],
+  "config": {
+    "pauseOnHumanNodes": true,
+    "redactSecretsInLogs": true
+  },
+  "createdAt": "2026-06-18T14:58:39.278Z",
+  "updatedAt": "2026-06-18T15:03:35.572Z"
+}

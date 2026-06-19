@@ -15,6 +15,7 @@ import {
 } from "@/lib/engine/backends/agent-orchestrator-backend";
 import {
   resolveAgentOrchestratorSettings,
+  resolveMaxConcurrentWorkers,
   validateRepoRelativePath,
 } from "@/lib/engine/backends/agent-orchestrator-config";
 import { ProcessRunner, type ProcessSpawnOutcome, type ProcessSpawner } from "@/lib/engine/process-runner";
@@ -28,7 +29,6 @@ const aoProject = (repoPath: string) => ({
       enabled: true,
       configPath: "agent-orchestrator.yaml",
       projectId: "loop-control-plane",
-      dashboardUrl: "http://localhost:3000",
       pollIntervalMs: 1,
     },
   },
@@ -109,6 +109,36 @@ const createAoSpawner = (handlers: {
 };
 
 describe("agent orchestrator config", () => {
+  it("resolves max concurrent workers from fan-out override, project settings, then default", () => {
+    const project = {
+      ...aoProject("/tmp"),
+      engineSettings: {
+        agentOrchestrator: {
+          enabled: true,
+          maxConcurrentWorkers: 3,
+        },
+      },
+    };
+
+    assert.equal(resolveMaxConcurrentWorkers(project), 3);
+    assert.equal(
+      resolveMaxConcurrentWorkers(project, {
+        backend: "agent-orchestrator",
+        fanOut: { maxConcurrency: 5, issueIds: [1] },
+      }),
+      5,
+    );
+    assert.equal(
+      resolveMaxConcurrentWorkers(
+        {
+          ...project,
+          engineSettings: { agentOrchestrator: { enabled: true, maxConcurrentWorkers: 0 } },
+        },
+      ),
+      0,
+    );
+  });
+
   it("rejects config paths outside the project repository", () => {
     const tempDirectory = mkdtempSync(join(tmpdir(), "ao-config-"));
 
@@ -460,6 +490,49 @@ describe("agent orchestrator backend adapter", () => {
       assert.equal(poll.status, "completed");
       assert.equal(poll.artifacts?.branchLabel, "completed");
       assert.equal(poll.artifacts?.prUrl, "https://github.com/org/repo/pull/9");
+    } finally {
+      rmSync(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("kills every recorded AO session when an engine job is cancelled", async () => {
+    const tempDirectory = mkdtempSync(join(tmpdir(), "ao-cancel-"));
+    writeFileSync(join(tempDirectory, "agent-orchestrator.yaml"), "projects: {}\n");
+
+    const captured: string[][] = [];
+    const job = {
+      ...sampleJob(),
+      result: {
+        externalSessionId: "loop-control-plane-42",
+        sessions: [
+          { issueNumber: 42, sessionId: "loop-control-plane-42" },
+          { issueNumber: 43, sessionId: "loop-control-plane-43" },
+        ],
+      },
+    };
+    const adapter = createAgentOrchestratorBackendAdapter({
+      repository: {
+        getEngineJob: () => job,
+        getProject: () => aoProject(tempDirectory),
+      } as never,
+      processRunner: new ProcessRunner(async (_command, args) => {
+        captured.push(args);
+        return {
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+        };
+      }),
+    });
+
+    try {
+      await adapter.cancel(job.id);
+
+      assert.deepEqual(captured, [
+        ["session", "kill", "loop-control-plane-42"],
+        ["session", "kill", "loop-control-plane-43"],
+      ]);
     } finally {
       rmSync(tempDirectory, { recursive: true, force: true });
     }

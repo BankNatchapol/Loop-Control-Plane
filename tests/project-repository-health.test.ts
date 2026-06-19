@@ -46,7 +46,7 @@ describe("project repository health", () => {
       spawnSync("git", ["init", repositoryPath], { encoding: "utf8" });
       git(repositoryPath, ["checkout", "-b", "feature/project-management"]);
       git(repositoryPath, ["config", "user.email", "loopboard@example.com"]);
-      git(repositoryPath, ["config", "user.name", "LoopBoard Test"]);
+      git(repositoryPath, ["config", "user.name", "Loop Control Plane Test"]);
       writeFileSync(join(repositoryPath, "README.md"), "# fixture\n");
       git(repositoryPath, ["add", "README.md"]);
       git(repositoryPath, ["commit", "-m", "Initial commit"]);

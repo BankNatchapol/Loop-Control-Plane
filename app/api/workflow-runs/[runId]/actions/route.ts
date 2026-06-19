@@ -18,9 +18,11 @@ const workflowRunActions = new Set<WorkflowRunAction>([
   "run-next",
   "run-next-engine",
   "approve",
+  "skip",
   "skip-disabled",
   "fail",
   "resume",
+  "abandon",
 ]);
 
 const readWorkflowActionBody = async (request: Request): Promise<unknown> => {

@@ -13,6 +13,7 @@ import {
   ValidationError,
 } from "@/lib/db/loopboard-repository";
 import { seedFeatures, seedProject, seedTasks, seedWorkflows } from "@/lib/loopboard";
+import { createDefaultFeatureWorkflowInput } from "@/lib/workflows/default-workflow";
 
 const withRepository = (test: (repository: LoopBoardRepository) => void) => {
   const tempDirectory = mkdtempSync(join(tmpdir(), "loopboard-repository-"));
@@ -36,18 +37,19 @@ describe("LoopBoard repository", () => {
 
       assert.equal(workflows.length, seedWorkflows.length);
       assert.equal(workflow.name, "Feature Development Loop");
-      assert.equal(workflow.nodes.length, 11);
-      assert.equal(workflow.edges.length, 11);
+      assert.equal(workflow.nodes.length, 12);
+      assert.equal(workflow.edges.length, 14);
       assert.deepEqual(
         workflow.nodes.map((node) => node.mode).sort(),
         [
           "auto",
           "auto",
+          "auto",
           "human",
           "human",
           "human",
           "human",
-          "semi",
+          "human",
           "semi",
           "semi",
           "semi",
@@ -67,7 +69,7 @@ describe("LoopBoard repository", () => {
           (edge) =>
             edge.sourceNodeId === "node-manual-claude-code-edit" &&
             edge.targetNodeId === "node-run-tests" &&
-            edge.label === "retry",
+            edge.label === "next",
         ),
       );
     });
@@ -175,6 +177,26 @@ describe("LoopBoard repository", () => {
           error.message ===
             "Workflow edges must reference nodes in the same workflow.",
       );
+
+      const updated = repository.updateWorkflow(workflow.id, {
+        edges: [
+          {
+            ...workflow.edges[0]!,
+            sourceHandle: "bottom",
+            targetHandle: "top",
+            dashed: true,
+          },
+        ],
+      });
+
+      assert.equal(updated.edges[0]?.sourceHandle, "bottom");
+      assert.equal(updated.edges[0]?.targetHandle, "top");
+      assert.equal(updated.edges[0]?.dashed, true);
+
+      const reloaded = repository.getWorkflow(workflow.id);
+      assert.equal(reloaded.edges[0]?.sourceHandle, "bottom");
+      assert.equal(reloaded.edges[0]?.targetHandle, "top");
+      assert.equal(reloaded.edges[0]?.dashed, true);
     });
   });
 
@@ -334,6 +356,33 @@ describe("LoopBoard repository", () => {
         repository.listProjects().some((item) => item.id === project.id),
         false,
       );
+    });
+  });
+
+  it("creates an isolated default workflow for a new project", () => {
+    withRepository((repository) => {
+      const project = repository.createProject({
+        id: "project-default-workflow-fixture",
+        name: "Default Workflow Fixture",
+        repoPath: "/tmp/default-workflow-fixture",
+      });
+      const workflow = repository.createWorkflow(
+        createDefaultFeatureWorkflowInput(project.id),
+      );
+
+      assert.equal(workflow.projectId, project.id);
+      assert.equal(workflow.name, "Feature Development Loop");
+      assert.equal(workflow.nodes.length, seedWorkflows[0]?.nodes.length);
+      assert.equal(workflow.edges.length, seedWorkflows[0]?.edges.length);
+      assert.notEqual(workflow.id, seedWorkflows[0]?.id);
+      assert.ok(
+        workflow.nodes.every(
+          (node) =>
+            node.workflowId === workflow.id &&
+            !seedWorkflows[0]?.nodes.some((template) => template.id === node.id),
+        ),
+      );
+      assert.equal("defaultFeatureId" in workflow.config, false);
     });
   });
 

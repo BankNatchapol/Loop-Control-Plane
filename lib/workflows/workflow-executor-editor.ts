@@ -14,13 +14,64 @@ import {
   workflowNodeShellWarning,
 } from "@/lib/policies/automation-policy";
 
-export const workflowExecutorBackendOptions = (): readonly ExecutorBackend[] =>
-  EXECUTOR_BACKENDS;
+const BUILT_IN_EXECUTOR_NODE_TYPES = new Set([
+  "import-tasks",
+  "create-github-issues",
+  "run-tests",
+  "open-pr",
+  "merge",
+]);
+
+export const workflowExecutorBackendOptions = (
+  nodeType?: string,
+): readonly ExecutorBackend[] => {
+  if (nodeType && BUILT_IN_EXECUTOR_NODE_TYPES.has(nodeType)) {
+    return ["stub"];
+  }
+
+  if (nodeType === "spec-kit-actions") {
+    return ["cursor", "claude-code", "codex"];
+  }
+
+  if (nodeType === "agent-orchestrator-implement") {
+    return ["agent-orchestrator"];
+  }
+
+  return EXECUTOR_BACKENDS;
+};
+
+export const workflowExecutorBackendLabel = (
+  backend: ExecutorBackend,
+  nodeType?: string,
+): string => {
+  if (backend === "stub" && nodeType === "spec-kit-actions") {
+    return "stub (unsupported)";
+  }
+
+  if (backend === "stub") {
+    return "stub (built-in)";
+  }
+
+  return backend;
+};
 
 export const isAutomatableWorkflowNodeType = (nodeType: string): boolean =>
   workflowNodeTypesWithEngineExecutors().includes(
     nodeType as ReturnType<typeof workflowNodeTypesWithEngineExecutors>[number],
   );
+
+export const AO_AGENT_PLUGIN_OPTIONS = [
+  { value: "claude-code", label: "Claude Code", defaultModel: "claude-sonnet-4-6" },
+  { value: "codex",       label: "Codex",       defaultModel: "gpt-5.5"           },
+  { value: "cursor",      label: "Cursor",       defaultModel: "composer-2.5"      },
+] as const;
+
+export const AO_AGENT_PLUGIN_DEFAULT = "claude-code";
+
+export const aoAgentPluginLabel = (plugin?: string): string =>
+  AO_AGENT_PLUGIN_OPTIONS.find(
+    (option) => option.value === (plugin || AO_AGENT_PLUGIN_DEFAULT),
+  )?.label ?? plugin ?? "Claude Code";
 
 export type ExecutorEditorState = {
   automatable: boolean;
@@ -30,6 +81,8 @@ export type ExecutorEditorState = {
   model: string;
   fanOutMaxConcurrency: string;
   fanOutIssueIdsText: string;
+  aoAgentPlugin: string;
+  aoAgentModels: Record<string, string>;
   defaultBackend: ExecutorBackend;
 };
 
@@ -71,6 +124,8 @@ export const readExecutorEditorState = (
         ? String(executor.fanOut.maxConcurrency)
         : "",
     fanOutIssueIdsText: formatFanOutIssueIds(executor.fanOut?.issueIds),
+    aoAgentPlugin: executor.aoAgentPlugin ?? AO_AGENT_PLUGIN_DEFAULT,
+    aoAgentModels: executor.aoAgentModels ?? {},
     defaultBackend: mapping?.defaultBackend ?? "stub",
   };
 };
@@ -84,6 +139,8 @@ export const applyExecutorEditorPatch = (
     model?: string;
     fanOutMaxConcurrency?: string;
     fanOutIssueIdsText?: string;
+    aoAgentPlugin?: string;
+    aoAgentModels?: Record<string, string>;
   },
 ): Record<string, unknown> => {
   const current = resolveWorkflowNodeExecutorConfig(node);
@@ -104,6 +161,21 @@ export const applyExecutorEditorPatch = (
     ...(patch.model !== undefined
       ? {
           model: patch.model.trim().length === 0 ? undefined : patch.model.trim(),
+        }
+      : {}),
+    ...(patch.aoAgentPlugin !== undefined
+      ? {
+          aoAgentPlugin:
+            patch.aoAgentPlugin.trim().length === 0 ||
+            patch.aoAgentPlugin.trim() === AO_AGENT_PLUGIN_DEFAULT
+              ? undefined
+              : patch.aoAgentPlugin.trim(),
+        }
+      : {}),
+    ...(patch.aoAgentModels !== undefined
+      ? {
+          aoAgentModels:
+            Object.keys(patch.aoAgentModels).length === 0 ? undefined : patch.aoAgentModels,
         }
       : {}),
   };
@@ -157,6 +229,25 @@ export const workflowNodeExecutorPolicyWarnings = (
   return warnings;
 };
 
+export const workflowNodeExecutorRuntimeHint = (
+  node: Pick<WorkflowNode, "type">,
+  executor: Pick<ExecutorEditorState, "backend">,
+): string | undefined => {
+  if (node.type === "spec-kit-actions" && executor.backend === "stub") {
+    return "Spec Kit Actions needs an agent backend. Choose cursor, codex, or claude-code so the agent can run the normal /speckit commands.";
+  }
+
+  if (executorBackendSupportsModel(executor.backend)) {
+    return "Model applies to new engine jobs for this node. Existing queued jobs keep the executor config they were created with.";
+  }
+
+  if (executorBackendSupportsFanOut(executor.backend)) {
+    return "AO workflow jobs enter through the built-in dispatcher; spawned AO workers use the Agent selected below. Saved changes apply to new workflow runs because active runs use a pinned snapshot.";
+  }
+
+  return undefined;
+};
+
 export const extractEngineJobIdFromWorkflowStep = (
   step?: WorkflowRunStep,
 ): string | undefined => {
@@ -179,3 +270,13 @@ export const executorBackendSupportsModel = (backend: ExecutorBackend): boolean 
 
 export const executorBackendSupportsFanOut = (backend: ExecutorBackend): boolean =>
   backend === "agent-orchestrator";
+
+/** Node types where the agent plugin (cursor / codex / claude-code) is configurable. */
+const AGENT_PLUGIN_NODE_TYPES = new Set([
+  "agent-orchestrator-implement",
+  "ai-review",
+  "pr-review-agent",
+]);
+
+export const workflowNodeSupportsAgentPlugin = (nodeType: string): boolean =>
+  AGENT_PLUGIN_NODE_TYPES.has(nodeType);

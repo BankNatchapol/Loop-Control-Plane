@@ -16,6 +16,7 @@ import {
   type FeatureEvent,
   type FeatureEventType,
   type FeatureStatus,
+  type AoRuntimeState,
   type GitHubState,
   type HandoffState,
   type KanbanStatus,
@@ -97,6 +98,7 @@ export interface CreateTaskInput {
   worktree?: string;
   github?: GitHubState;
   handoff?: HandoffState;
+  aoRuntime?: AoRuntimeState;
   createdAt?: string;
 }
 
@@ -193,6 +195,7 @@ export interface UpdateTaskInput {
   worktree?: string;
   github?: GitHubState;
   handoff?: HandoffState;
+  aoRuntime?: AoRuntimeState;
   actor?: TaskEvent["actor"];
   message?: string;
   updatedAt?: string;
@@ -261,6 +264,9 @@ export interface CreateWorkflowRunInput {
   featureId?: string;
   status?: WorkflowRunStatus;
   currentNodeId?: string;
+  workflowVersion?: number;
+  workflowSnapshot?: Workflow;
+  interruption?: WorkflowRun["interruption"];
   inputArtifacts?: WorkflowArtifact[];
   outputArtifacts?: WorkflowArtifact[];
   executionLogs?: WorkflowLogEntry[];
@@ -279,6 +285,9 @@ export interface CreateWorkflowRunInput {
 export interface UpdateWorkflowRunInput {
   status?: WorkflowRunStatus;
   currentNodeId?: string | null;
+  workflowVersion?: number;
+  workflowSnapshot?: Workflow;
+  interruption?: WorkflowRun["interruption"] | null;
   inputArtifacts?: WorkflowArtifact[];
   outputArtifacts?: WorkflowArtifact[];
   executionLogs?: WorkflowLogEntry[];
@@ -292,6 +301,7 @@ export interface UpsertWorkflowRunStepInput {
   workflowNodeId: string;
   status: WorkflowRunStepStatus;
   attempt?: number;
+  checkpoint?: WorkflowRunStep["checkpoint"];
   inputArtifacts?: WorkflowArtifact[];
   outputArtifacts?: WorkflowArtifact[];
   executionLogs?: WorkflowLogEntry[];
@@ -455,6 +465,7 @@ type TaskRow = {
   worktree: string;
   github: string;
   handoff: string;
+  ao_runtime: string;
   created_at: string;
   updated_at: string;
 };
@@ -509,6 +520,8 @@ type WorkflowEdgeRow = {
   target_node_id: string;
   label: string;
   dashed: number;
+  source_handle: string | null;
+  target_handle: string | null;
   condition: string;
   created_at: string;
   updated_at: string;
@@ -521,6 +534,9 @@ type WorkflowRunRow = {
   feature_id: string | null;
   status: WorkflowRunStatus;
   current_node_id: string | null;
+  workflow_version: string;
+  workflow_snapshot: string;
+  interruption: string | null;
   input_artifacts: string;
   output_artifacts: string;
   execution_logs: string;
@@ -536,6 +552,7 @@ type WorkflowRunStepRow = {
   workflow_node_id: string;
   status: WorkflowRunStepStatus;
   attempt: string;
+  checkpoint: string;
   input_artifacts: string;
   output_artifacts: string;
   execution_logs: string;
@@ -604,6 +621,16 @@ export class ValidationError extends LoopBoardRepositoryError {
 export class UnsupportedTransitionError extends LoopBoardRepositoryError {
   constructor(message: string) {
     super(message, 409, "unsupported_transition");
+  }
+}
+
+export class ResumableWorkflowRunError extends LoopBoardRepositoryError {
+  constructor(readonly existingRunId: string) {
+    super(
+      `Feature already has resumable workflow run "${existingRunId}". Resume or abandon it before starting another run.`,
+      409,
+      "resumable_workflow_run_exists",
+    );
   }
 }
 
@@ -697,6 +724,7 @@ const workflowRunStatuses = new Set<WorkflowRunStatus>([
   "queued",
   "running",
   "paused",
+  "interrupted",
   "completed",
   "failed",
   "cancelled",
@@ -704,6 +732,7 @@ const workflowRunStatuses = new Set<WorkflowRunStatus>([
 const workflowRunStepStatuses = new Set<WorkflowRunStepStatus>([
   "pending",
   "running",
+  "interrupted",
   "waiting-approval",
   "completed",
   "failed",
@@ -712,6 +741,7 @@ const workflowRunStepStatuses = new Set<WorkflowRunStepStatus>([
 const engineJobStatuses = new Set<EngineJobStatus>([
   "queued",
   "running",
+  "interrupted",
   "completed",
   "failed",
   "cancelled",
@@ -861,13 +891,15 @@ const normalizeProjectEngineSettings = (
       ...(typeof ao.projectId === "string" && ao.projectId.trim()
         ? { projectId: ao.projectId.trim() }
         : {}),
-      ...(typeof ao.dashboardUrl === "string" && ao.dashboardUrl.trim()
-        ? { dashboardUrl: ao.dashboardUrl.trim() }
-        : {}),
       ...(typeof ao.pollIntervalMs === "number" &&
       Number.isInteger(ao.pollIntervalMs) &&
       ao.pollIntervalMs > 0
         ? { pollIntervalMs: ao.pollIntervalMs }
+        : {}),
+      ...(typeof ao.maxConcurrentWorkers === "number" &&
+      Number.isInteger(ao.maxConcurrentWorkers) &&
+      ao.maxConcurrentWorkers >= 0
+        ? { maxConcurrentWorkers: ao.maxConcurrentWorkers }
         : {}),
     };
   }
@@ -1438,6 +1470,7 @@ const taskFromRow = (row: TaskRow, events: TaskEvent[]): PersistedTask => ({
     available: false,
     contextPaths: [],
   }),
+  aoRuntime: parseJson<AoRuntimeState>(row.ao_runtime, {}),
   events,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -1468,6 +1501,8 @@ const workflowEdgeFromRow = (row: WorkflowEdgeRow): WorkflowEdge => ({
   targetNodeId: row.target_node_id,
   label: row.label,
   ...(row.dashed ? { dashed: true } : {}),
+  ...(row.source_handle ? { sourceHandle: row.source_handle } : {}),
+  ...(row.target_handle ? { targetHandle: row.target_handle } : {}),
   condition: parseJson<Record<string, unknown>>(row.condition, {}),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -1496,6 +1531,7 @@ const workflowRunStepFromRow = (row: WorkflowRunStepRow): WorkflowRunStep => ({
   workflowNodeId: row.workflow_node_id,
   status: row.status,
   attempt: Number(row.attempt),
+  checkpoint: parseJson<WorkflowRunStep["checkpoint"]>(row.checkpoint, {}),
   inputArtifacts: parseJson<WorkflowArtifact[]>(row.input_artifacts, []),
   outputArtifacts: parseJson<WorkflowArtifact[]>(row.output_artifacts, []),
   executionLogs: parseJson<WorkflowLogEntry[]>(row.execution_logs, []),
@@ -1518,6 +1554,15 @@ const workflowRunFromRow = (
   featureId: row.feature_id ?? undefined,
   status: row.status,
   currentNodeId: row.current_node_id ?? undefined,
+  workflowVersion: Number(row.workflow_version || "1"),
+  workflowSnapshot: parseJson<Workflow>(row.workflow_snapshot, {} as Workflow),
+  interruption: row.interruption
+    ? parseJson<NonNullable<WorkflowRun["interruption"]>>(row.interruption, {
+        reason: "Workflow execution was interrupted.",
+        interruptedAt: row.updated_at,
+        previousStatus: "running",
+      })
+    : undefined,
   inputArtifacts: parseJson<WorkflowArtifact[]>(row.input_artifacts, []),
   outputArtifacts: parseJson<WorkflowArtifact[]>(row.output_artifacts, []),
   executionLogs: parseJson<WorkflowLogEntry[]>(row.execution_logs, []),
@@ -1960,6 +2005,7 @@ export class LoopBoardRepository {
       worktree: input.worktree ?? "",
       github: input.github ?? {},
       handoff: input.handoff ?? { available: false, contextPaths: [] },
+      aoRuntime: input.aoRuntime ?? {},
       events: [],
       createdAt: now,
       updatedAt: now,
@@ -2026,6 +2072,7 @@ export class LoopBoardRepository {
       worktree: input.worktree === undefined ? task.worktree : input.worktree,
       github: input.github === undefined ? task.github : input.github,
       handoff: input.handoff === undefined ? task.handoff : input.handoff,
+      aoRuntime: input.aoRuntime === undefined ? task.aoRuntime ?? {} : input.aoRuntime,
       updatedAt,
     };
     const changedFields = changedTaskFields(task, nextTask);
@@ -2623,9 +2670,138 @@ export class LoopBoardRepository {
     );
   }
 
+  getResumableWorkflowRunForFeature(
+    projectId: string,
+    featureId: string,
+  ): WorkflowRun | undefined {
+    const row = this.database
+      .prepare(
+        `
+          SELECT * FROM workflow_runs
+          WHERE project_id = ?
+            AND feature_id = ?
+            AND status IN ('queued', 'running', 'paused', 'interrupted', 'failed')
+            AND current_node_id IS NOT NULL
+          ORDER BY updated_at DESC, created_at DESC
+          LIMIT 1
+        `,
+      )
+      .get(projectId, featureId) as WorkflowRunRow | undefined;
+
+    return row
+      ? workflowRunFromRow(row, this.listWorkflowRunSteps(row.id))
+      : undefined;
+  }
+
   getLatestWorkflowRunForProject(projectId: string): WorkflowRun | undefined {
     this.getProject(assertNonEmptyString(projectId, "projectId"));
     return this.latestWorkflowRunForProject(projectId);
+  }
+
+  interruptOrphanedExecutions(reason = "Application process restarted."): {
+    runs: number;
+    steps: number;
+    jobs: number;
+  } {
+    const interruptedAt = new Date().toISOString();
+    const activeJobs = this.listEngineJobs({ status: ["queued", "running"] });
+    let steps = 0;
+    const affectedRunIds = new Set<string>();
+
+    for (const job of activeJobs) {
+      this.updateEngineJob(job.id, {
+        status: "interrupted",
+        error: reason,
+        completedAt: null,
+        executionLogs: [
+          ...job.executionLogs,
+          {
+            timestamp: interruptedAt,
+            level: "warn",
+            message: reason,
+            metadata: { recovery: "interrupted-on-startup" },
+          },
+        ],
+        updatedAt: interruptedAt,
+      });
+      if (job.workflowRunId) {
+        affectedRunIds.add(job.workflowRunId);
+      }
+    }
+
+    const runRows = this.database
+      .prepare("SELECT * FROM workflow_runs WHERE status = 'running'")
+      .all() as WorkflowRunRow[];
+
+    for (const row of runRows) {
+      const run = workflowRunFromRow(row, this.listWorkflowRunSteps(row.id));
+      const currentStep = [...run.steps]
+        .reverse()
+        .find(
+          (step) =>
+            step.workflowNodeId === run.currentNodeId && step.status === "running",
+        );
+      if (currentStep) {
+        this.upsertWorkflowRunStep(run.id, {
+          id: currentStep.id,
+          workflowNodeId: currentStep.workflowNodeId,
+          status: "interrupted",
+          attempt: currentStep.attempt,
+          checkpoint: currentStep.checkpoint,
+          inputArtifacts: currentStep.inputArtifacts,
+          outputArtifacts: currentStep.outputArtifacts,
+          executionLogs: [
+            ...currentStep.executionLogs,
+            {
+              timestamp: interruptedAt,
+              level: "warn",
+              message: reason,
+              metadata: { recovery: "interrupted-on-startup" },
+            },
+          ],
+          error: reason,
+          requireApproval: currentStep.requireApproval,
+          approvedAt: currentStep.approvedAt,
+          startedAt: currentStep.startedAt,
+          completedAt: null,
+          updatedAt: interruptedAt,
+        });
+        steps += 1;
+      }
+      const engineJob = activeJobs.find((job) => job.workflowRunId === run.id);
+      this.updateWorkflowRun(run.id, {
+        status: "interrupted",
+        workflowSnapshot: run.workflowSnapshot?.nodes?.length
+          ? run.workflowSnapshot
+          : this.getWorkflow(run.workflowId),
+        workflowVersion:
+          run.workflowVersion || this.getWorkflow(run.workflowId).version,
+        interruption: {
+          reason,
+          interruptedAt,
+          previousStatus: "running",
+          ...(engineJob ? { engineJobId: engineJob.id } : {}),
+        },
+        executionLogs: [
+          ...run.executionLogs,
+          {
+            timestamp: interruptedAt,
+            level: "warn",
+            message: reason,
+            metadata: { recovery: "interrupted-on-startup" },
+          },
+        ],
+        completedAt: null,
+        updatedAt: interruptedAt,
+      });
+      affectedRunIds.add(run.id);
+    }
+
+    return {
+      runs: affectedRunIds.size,
+      steps,
+      jobs: activeJobs.length,
+    };
   }
 
   getWorkflowRun(runId: string): WorkflowRun {
@@ -2666,6 +2842,12 @@ export class LoopBoardRepository {
       currentNodeId: input.currentNodeId
         ? assertNonEmptyString(input.currentNodeId, "currentNodeId")
         : undefined,
+      workflowVersion: assertPositiveInteger(
+        input.workflowVersion ?? workflow.version,
+        "workflowVersion",
+      ),
+      workflowSnapshot: structuredClone(input.workflowSnapshot ?? workflow),
+      interruption: input.interruption,
       inputArtifacts: input.inputArtifacts
         ? assertWorkflowArtifacts(input.inputArtifacts, "inputArtifacts")
         : [],
@@ -2682,7 +2864,7 @@ export class LoopBoardRepository {
       updatedAt: now,
     };
 
-    const nodeIds = new Set(workflow.nodes.map((node) => node.id));
+    const nodeIds = new Set(run.workflowSnapshot.nodes.map((node) => node.id));
     if (run.currentNodeId && !nodeIds.has(run.currentNodeId)) {
       throw new ValidationError("currentNodeId must reference a workflow node.");
     }
@@ -2714,6 +2896,22 @@ export class LoopBoardRepository {
         input.status === undefined
           ? run.status
           : assertWorkflowRunStatus(input.status),
+      workflowVersion:
+        input.workflowVersion === undefined
+          ? run.workflowVersion || workflow.version
+          : assertPositiveInteger(input.workflowVersion, "workflowVersion"),
+      workflowSnapshot:
+        input.workflowSnapshot === undefined
+          ? run.workflowSnapshot?.nodes?.length
+            ? run.workflowSnapshot
+            : structuredClone(workflow)
+          : structuredClone(input.workflowSnapshot),
+      interruption:
+        input.interruption === undefined
+          ? run.interruption
+          : input.interruption === null
+            ? undefined
+            : input.interruption,
       currentNodeId:
         input.currentNodeId === undefined
           ? run.currentNodeId
@@ -2747,7 +2945,7 @@ export class LoopBoardRepository {
       updatedAt,
     };
 
-    const nodeIds = new Set(workflow.nodes.map((node) => node.id));
+    const nodeIds = new Set(nextRun.workflowSnapshot.nodes.map((node) => node.id));
     if (nextRun.currentNodeId && !nodeIds.has(nextRun.currentNodeId)) {
       throw new ValidationError("currentNodeId must reference a workflow node.");
     }
@@ -2761,7 +2959,10 @@ export class LoopBoardRepository {
     input: UpsertWorkflowRunStepInput,
   ): WorkflowRun {
     const run = this.getWorkflowRun(assertNonEmptyString(runId, "runId"));
-    const workflow = this.getWorkflow(run.workflowId);
+    const workflow =
+      run.workflowSnapshot?.nodes?.length
+        ? run.workflowSnapshot
+        : this.getWorkflow(run.workflowId);
     const nodeId = assertNonEmptyString(input.workflowNodeId, "workflowNodeId");
 
     if (!workflow.nodes.some((node) => node.id === nodeId)) {
@@ -2780,6 +2981,10 @@ export class LoopBoardRepository {
       workflowNodeId: nodeId,
       status: assertWorkflowRunStepStatus(input.status),
       attempt: assertPositiveInteger(input.attempt ?? existingStep?.attempt ?? 1, "attempt"),
+      checkpoint:
+        input.checkpoint === undefined
+          ? existingStep?.checkpoint ?? {}
+          : assertRecord(input.checkpoint, "checkpoint"),
       inputArtifacts:
         input.inputArtifacts === undefined
           ? existingStep?.inputArtifacts ?? []
@@ -2926,6 +3131,7 @@ export class LoopBoardRepository {
     const counts: Record<EngineJobStatus, number> = {
       queued: 0,
       running: 0,
+      interrupted: 0,
       completed: 0,
       failed: 0,
       cancelled: 0,
@@ -3408,16 +3614,24 @@ export class LoopBoardRepository {
     edges: NonNullable<CreateWorkflowInput["edges"]>,
     timestamp: string,
   ): WorkflowEdge[] {
-    return edges.map((edge) => ({
-      id: assertNonEmptyString(edge.id, "edge.id"),
-      workflowId,
-      sourceNodeId: assertNonEmptyString(edge.sourceNodeId, "edge.sourceNodeId"),
-      targetNodeId: assertNonEmptyString(edge.targetNodeId, "edge.targetNodeId"),
-      label: assertOptionalString(edge.label, "edge.label"),
-      condition: assertRecord(edge.condition, "edge.condition"),
-      createdAt: edge.createdAt ?? timestamp,
-      updatedAt: edge.updatedAt ?? timestamp,
-    }));
+    return edges.map((edge) => {
+      const sourceHandle = assertOptionalString(edge.sourceHandle, "edge.sourceHandle");
+      const targetHandle = assertOptionalString(edge.targetHandle, "edge.targetHandle");
+
+      return {
+        id: assertNonEmptyString(edge.id, "edge.id"),
+        workflowId,
+        sourceNodeId: assertNonEmptyString(edge.sourceNodeId, "edge.sourceNodeId"),
+        targetNodeId: assertNonEmptyString(edge.targetNodeId, "edge.targetNodeId"),
+        label: assertOptionalString(edge.label, "edge.label"),
+        ...(edge.dashed ? { dashed: true as const } : {}),
+        ...(sourceHandle ? { sourceHandle } : {}),
+        ...(targetHandle ? { targetHandle } : {}),
+        condition: assertRecord(edge.condition, "edge.condition"),
+        createdAt: edge.createdAt ?? timestamp,
+        updatedAt: edge.updatedAt ?? timestamp,
+      };
+    });
   }
 
   private normalizeWorkflowRunSteps(
@@ -3434,6 +3648,7 @@ export class LoopBoardRepository {
       ),
       status: assertWorkflowRunStepStatus(step.status),
       attempt: assertPositiveInteger(step.attempt, "step.attempt"),
+      checkpoint: assertRecord(step.checkpoint ?? {}, "step.checkpoint"),
       inputArtifacts: assertWorkflowArtifacts(
         step.inputArtifacts,
         "step.inputArtifacts",
@@ -3637,9 +3852,9 @@ export class LoopBoardRepository {
           INSERT INTO tasks (
             id, project_id, feature_id, title, description, status, owner, mode,
             risk, source, labels, acceptance_criteria, dependencies, branch,
-            worktree, github, handoff, created_at, updated_at
+            worktree, github, handoff, ao_runtime, created_at, updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -3660,6 +3875,7 @@ export class LoopBoardRepository {
         task.worktree,
         json(task.github),
         json(task.handoff),
+        json(task.aoRuntime ?? {}),
         task.createdAt,
         task.updatedAt,
       );
@@ -3672,7 +3888,7 @@ export class LoopBoardRepository {
           UPDATE tasks
           SET title = ?, description = ?, status = ?, owner = ?, mode = ?,
             risk = ?, labels = ?, acceptance_criteria = ?, dependencies = ?,
-            branch = ?, worktree = ?, github = ?, handoff = ?, updated_at = ?
+            branch = ?, worktree = ?, github = ?, handoff = ?, ao_runtime = ?, updated_at = ?
           WHERE id = ?
         `,
       )
@@ -3690,6 +3906,7 @@ export class LoopBoardRepository {
         task.worktree,
         json(task.github),
         json(task.handoff),
+        json(task.aoRuntime ?? {}),
         task.updatedAt,
         task.id,
       );
@@ -3798,10 +4015,11 @@ export class LoopBoardRepository {
       .prepare(
         `
           INSERT INTO workflow_edges (
-            id, workflow_id, source_node_id, target_node_id, label, dashed, condition,
+            id, workflow_id, source_node_id, target_node_id, label, dashed,
+            source_handle, target_handle, condition,
             created_at, updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -3811,6 +4029,8 @@ export class LoopBoardRepository {
         edge.targetNodeId,
         edge.label,
         edge.dashed ? 1 : 0,
+        edge.sourceHandle ?? null,
+        edge.targetHandle ?? null,
         json(edge.condition),
         edge.createdAt,
         edge.updatedAt,
@@ -3823,10 +4043,11 @@ export class LoopBoardRepository {
         `
           INSERT INTO workflow_runs (
             id, workflow_id, project_id, feature_id, status, current_node_id,
+            workflow_version, workflow_snapshot, interruption,
             input_artifacts, output_artifacts, execution_logs, started_at,
             completed_at, created_at, updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -3836,6 +4057,9 @@ export class LoopBoardRepository {
         run.featureId ?? null,
         run.status,
         run.currentNodeId ?? null,
+        String(run.workflowVersion),
+        json(run.workflowSnapshot),
+        run.interruption ? json(run.interruption) : null,
         json(run.inputArtifacts),
         json(run.outputArtifacts),
         json(run.executionLogs),
@@ -3853,6 +4077,9 @@ export class LoopBoardRepository {
           UPDATE workflow_runs
           SET status = ?,
               current_node_id = ?,
+              workflow_version = ?,
+              workflow_snapshot = ?,
+              interruption = ?,
               input_artifacts = ?,
               output_artifacts = ?,
               execution_logs = ?,
@@ -3865,6 +4092,9 @@ export class LoopBoardRepository {
       .run(
         run.status,
         run.currentNodeId ?? null,
+        String(run.workflowVersion),
+        json(run.workflowSnapshot),
+        run.interruption ? json(run.interruption) : null,
         json(run.inputArtifacts),
         json(run.outputArtifacts),
         json(run.executionLogs),
@@ -3880,11 +4110,11 @@ export class LoopBoardRepository {
       .prepare(
         `
           INSERT INTO workflow_run_steps (
-            id, run_id, workflow_node_id, status, attempt, input_artifacts,
+            id, run_id, workflow_node_id, status, attempt, checkpoint, input_artifacts,
             output_artifacts, execution_logs, error, require_approval, approved_at,
             started_at, completed_at, created_at, updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -3893,6 +4123,7 @@ export class LoopBoardRepository {
         step.workflowNodeId,
         step.status,
         String(step.attempt),
+        json(step.checkpoint),
         json(step.inputArtifacts),
         json(step.outputArtifacts),
         json(step.executionLogs),
@@ -3913,6 +4144,7 @@ export class LoopBoardRepository {
           UPDATE workflow_run_steps
           SET status = ?,
               attempt = ?,
+              checkpoint = ?,
               input_artifacts = ?,
               output_artifacts = ?,
               execution_logs = ?,
@@ -3928,6 +4160,7 @@ export class LoopBoardRepository {
       .run(
         step.status,
         String(step.attempt),
+        json(step.checkpoint),
         json(step.inputArtifacts),
         json(step.outputArtifacts),
         json(step.executionLogs),
@@ -4032,6 +4265,7 @@ const changedTaskFields = (current: PersistedTask, next: PersistedTask): string[
     "worktree",
     "github",
     "handoff",
+    "aoRuntime",
   ];
 
   return fields.filter((field) => JSON.stringify(current[field]) !== JSON.stringify(next[field]));

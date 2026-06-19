@@ -10,6 +10,7 @@ import {
   normalizeGitHubRepository,
   parseGitHubRepository,
 } from "@/lib/projects/project-repository-health";
+import { createDefaultFeatureWorkflowInput } from "@/lib/workflows/default-workflow";
 
 export const runtime = "nodejs";
 
@@ -89,9 +90,20 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const input = buildProjectInput(await readJsonBody(request));
-    const project = await withLoopBoardRepository((repository) =>
-      repository.createProject(input),
-    );
+    const project = await withLoopBoardRepository((repository) => {
+      const createdProject = repository.createProject(input);
+
+      try {
+        repository.createWorkflow(
+          createDefaultFeatureWorkflowInput(createdProject.id),
+        );
+      } catch (error) {
+        repository.deleteProject(createdProject.id);
+        throw error;
+      }
+
+      return createdProject;
+    });
 
     return jsonOk(project, { status: 201 });
   } catch (error) {

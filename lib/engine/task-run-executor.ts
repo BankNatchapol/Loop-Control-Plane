@@ -126,7 +126,9 @@ const resolveWorkflowNodeFallback = (
   }
 
   const run = repository.getWorkflowRun(job.workflowRunId);
-  const workflow = repository.getWorkflow(run.workflowId);
+  const workflow = run.workflowSnapshot?.nodes?.length
+    ? run.workflowSnapshot
+    : repository.getWorkflow(run.workflowId);
   const node = workflow.nodes.find((candidate) => candidate.id === job.workflowNodeId);
 
   return node;

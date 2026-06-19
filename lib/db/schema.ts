@@ -1,4 +1,4 @@
-import { index, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 import type {
   EngineJobKind,
@@ -8,6 +8,7 @@ import type {
   ExecutorBackend,
 } from "@/lib/engine/loop-engine-types";
 import type {
+  AoRuntimeState,
   Feature,
   FeatureEvent,
   FeatureEventType,
@@ -128,6 +129,9 @@ export const tasks = sqliteTable(
     worktree: text("worktree").notNull(),
     github: text("github", { mode: "json" }).notNull().$type<GitHubState>(),
     handoff: text("handoff", { mode: "json" }).notNull().$type<HandoffState>(),
+    aoRuntime: text("ao_runtime", { mode: "json" })
+      .notNull()
+      .$type<AoRuntimeState>(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
@@ -267,6 +271,9 @@ export const workflowEdges = sqliteTable(
     sourceNodeId: text("source_node_id").notNull(),
     targetNodeId: text("target_node_id").notNull(),
     label: text("label").notNull(),
+    dashed: integer("dashed").notNull().default(0),
+    sourceHandle: text("source_handle"),
+    targetHandle: text("target_handle"),
     condition: text("condition", { mode: "json" })
       .notNull()
       .$type<Record<string, unknown>>(),
@@ -295,6 +302,12 @@ export const workflowRuns = sqliteTable(
     }),
     status: text("status").notNull().$type<WorkflowRunStatus>(),
     currentNodeId: text("current_node_id"),
+    workflowVersion: text("workflow_version").notNull().default("1"),
+    workflowSnapshot: text("workflow_snapshot", { mode: "json" })
+      .notNull()
+      .$type<Workflow>(),
+    interruption: text("interruption", { mode: "json" })
+      .$type<WorkflowRun["interruption"]>(),
     inputArtifacts: text("input_artifacts", { mode: "json" })
       .notNull()
       .$type<WorkflowArtifact[]>(),
@@ -341,6 +354,9 @@ export const engineJobs = sqliteTable(
       .$type<EngineRunLogEntry[]>(),
     error: text("error"),
     attempt: text("attempt").notNull(),
+    checkpoint: text("checkpoint", { mode: "json" })
+      .notNull()
+      .$type<WorkflowRunStep["checkpoint"]>(),
     maxAttempts: text("max_attempts").notNull(),
     queuedAt: text("queued_at").notNull(),
     startedAt: text("started_at"),

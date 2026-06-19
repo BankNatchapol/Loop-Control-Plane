@@ -17,7 +17,7 @@ import { syncExistingTaskEventsFile } from "@/lib/api/task-context-actions";
 import { LoopBoardRepository } from "@/lib/db/loopboard-repository";
 import { seedFeatures, seedProject, seedTasks } from "@/lib/loopboard";
 
-describe("LoopBoard local persistence", () => {
+describe("Loop Control Plane local persistence", () => {
   it("keeps migrated tasks, events, and generated context files across database reopen", () => {
     const tempDirectory = mkdtempSync(join(tmpdir(), "loopboard-persistence-"));
     const databasePath = join(tempDirectory, "loopboard.sqlite");

@@ -4,16 +4,57 @@ import { describe, it } from "node:test";
 import { withExecutorConfig } from "@/lib/engine/loop-engine-types";
 import { createCatalogWorkflowNode } from "@/lib/workflows/workflow-editor";
 import {
+  AO_AGENT_PLUGIN_OPTIONS,
+  aoAgentPluginLabel,
   applyExecutorEditorPatch,
   extractEngineJobIdFromWorkflowStep,
   formatExecutorArgs,
   isAutomatableWorkflowNodeType,
   parseExecutorArgs,
   readExecutorEditorState,
+  workflowExecutorBackendLabel,
+  workflowExecutorBackendOptions,
   workflowNodeExecutorPolicyWarnings,
+  workflowNodeExecutorRuntimeHint,
 } from "@/lib/workflows/workflow-executor-editor";
 
 describe("workflow executor editor helpers", () => {
+  it("uses human-readable AO agent labels", () => {
+    assert.equal(aoAgentPluginLabel("cursor"), "Cursor");
+    assert.equal(aoAgentPluginLabel("codex"), "Codex");
+    assert.equal(aoAgentPluginLabel(undefined), "Claude Code");
+  });
+
+  it("only offers built-in transport for deterministic workflow nodes", () => {
+    assert.deepEqual(workflowExecutorBackendOptions("import-tasks"), ["stub"]);
+    assert.deepEqual(workflowExecutorBackendOptions("run-tests"), ["stub"]);
+    assert.deepEqual(workflowExecutorBackendOptions("spec-kit-actions"), [
+      "cursor",
+      "claude-code",
+      "codex",
+    ]);
+    assert.deepEqual(
+      workflowExecutorBackendOptions("agent-orchestrator-implement"),
+      ["agent-orchestrator"],
+    );
+  });
+
+  it("uses CLI-compatible default agent model names", () => {
+    assert.deepEqual(
+      Object.fromEntries(
+        AO_AGENT_PLUGIN_OPTIONS.map(({ value, defaultModel }) => [
+          value,
+          defaultModel,
+        ]),
+      ),
+      {
+        "claude-code": "claude-sonnet-4-6",
+        codex: "gpt-5.5",
+        cursor: "composer-2.5",
+      },
+    );
+  });
+
   it("reads and applies executor editor fields for automatable nodes", () => {
     const node = createCatalogWorkflowNode({
       type: "spec-kit-actions",
@@ -41,6 +82,35 @@ describe("workflow executor editor helpers", () => {
     assert.equal(state.argsText, "spec, plan");
     assert.equal(state.timeoutMs, "120000");
     assert.equal(state.model, "composer-2.5-fast");
+  });
+
+  it("labels and explains built-in executor paths", () => {
+    const node = createCatalogWorkflowNode({
+      type: "spec-kit-actions",
+      workflowId: "workflow-editor-labels",
+      index: 0,
+    });
+    const state = readExecutorEditorState(node);
+
+    assert.equal(
+      workflowExecutorBackendLabel("stub", node.type),
+      "stub (unsupported)",
+    );
+    assert.equal(workflowExecutorBackendLabel("stub"), "stub (built-in)");
+    assert.match(
+      workflowNodeExecutorRuntimeHint(node, state) ?? "",
+      /agent backend/u,
+    );
+
+    const codexState = readExecutorEditorState({
+      ...node,
+      config: applyExecutorEditorPatch(node, { backend: "codex", model: "gpt-5" }),
+    });
+
+    assert.match(
+      workflowNodeExecutorRuntimeHint(node, codexState) ?? "",
+      /new engine jobs/u,
+    );
   });
 
   it("reads and applies Agent Orchestrator fan-out settings", () => {

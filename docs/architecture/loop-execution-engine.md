@@ -153,7 +153,7 @@ The `agent-orchestrator` adapter wraps `ao spawn`, `ao status --json`, and optio
 Key behaviors:
 
 - **Single-task handoff** — Linked GitHub issue + `ao-ready` label (or policy-driven `mark-ao-ready`) before spawn; see [[GitHub-Issue-Bridge]]
-- **Fan-out** — Workflow node `executor.fanOut.maxConcurrency` + `executor.fanOut.issueIds[]`; parallel spawns with dedupe by issue number
+- **Fan-out** — Workflow node `executor.fanOut.maxConcurrency` overrides project pool size; `runAoWorkerPool` backfills as workers finish
 - **Poll deferral** — Job stays `running` with `awaitingExternalSync: true`; `EngineSyncService` reconciles on scheduler ticks
 - **Untrusted results** — Summaries, branch labels, and PR URLs prefixed `[external/untrusted]` per [[Security-Policy]]
 - **Stuck jobs** — Poll timeout marks job failed and task Blocked; AO session is **not** killed by default
@@ -182,7 +182,9 @@ Backend-specific options on `config.executor`:
 | `agentOrchestrator.enabled` | Enable AO adapter for this project |
 | `agentOrchestrator.configPath` | Repo-relative AO yaml path (validated) |
 | `agentOrchestrator.projectId` | Default AO project key |
-| `agentOrchestrator.dashboardUrl` | Task detail **Open AO Dashboard** link |
+| `agentOrchestrator.maxConcurrentWorkers` | Default AO worker pool size (2); 0 = unlimited |
+| `agentOrchestrator.pollIntervalMs` | AO status poll interval hint |
+| `agentOrchestrator.projectId` | AO project key; sessions linked to tasks via GitHub issue number |
 | `agentOrchestrator.pollIntervalMs` | External sync poll cadence |
 
 ### Availability and UI

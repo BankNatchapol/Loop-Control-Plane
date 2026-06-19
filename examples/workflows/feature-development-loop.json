@@ -2,7 +2,7 @@
   "id": "workflow-feature-development-loop",
   "projectId": "project-loopboard",
   "name": "Feature Development Loop",
-  "description": "End-to-end feature workflow: human writes a brief, Spec Kit generates and clarifies artifacts, AO implements per task with CI loops and PR review, then the feature branch is tested, reviewed, and merged.",
+  "description": "End-to-end feature workflow: Spec Kit defines the work, AO implements and reviews task PRs, a human refines the integrated branch, tests and final PR-Agent review loop until a human-approved squash merge.",
   "version": 1,
   "nodes": [
     {
@@ -183,18 +183,61 @@
       "currentState": "idle"
     },
     {
-      "id": "node-run-tests",
+      "id": "node-manual-claude-code-edit",
       "workflowId": "workflow-feature-development-loop",
-      "type": "run-tests",
-      "name": "Run Tests",
-      "guidance": "Runs the project test suite against the feature branch after all per-task PRs are merged. Provides independent verification beyond AO's internal CI loop.",
-      "mode": "auto",
+      "type": "manual-claude-code-edit",
+      "name": "Manual Claude Code Edit",
+      "guidance": "Review and edit the integrated feature branch. On later loops, use the latest test report and PR-Agent findings, then approve when the branch is ready to test again.",
+      "mode": "human",
       "position": { "x": 1820, "y": 120 },
       "inputArtifacts": [
         {
           "name": "implementation-branch",
           "path": "git://{repository}/{branch}",
+          "required": false
+        },
+        {
+          "name": "test-report",
+          "path": "loopboard://runs/{run}/test-report",
+          "required": false
+        },
+        {
+          "name": "review-comments",
+          "path": "loopboard://runs/{run}/review-comments",
+          "required": false
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "manual-patch",
+          "path": "git://{repository}/{branch}",
           "required": true
+        }
+      ],
+      "requireApproval": true,
+      "maxRetries": 0,
+      "riskPolicy": "manual-only",
+      "config": { "optional": true },
+      "currentState": "idle"
+    },
+    {
+      "id": "node-run-tests",
+      "workflowId": "workflow-feature-development-loop",
+      "type": "run-tests",
+      "name": "Run Tests",
+      "guidance": "Runs the project test suite. Normal test failures route back to Manual Edit with a report; infrastructure errors fail the workflow step.",
+      "mode": "auto",
+      "position": { "x": 2080, "y": 120 },
+      "inputArtifacts": [
+        {
+          "name": "manual-patch",
+          "path": "git://{repository}/{branch}",
+          "required": false
+        },
+        {
+          "name": "implementation-branch",
+          "path": "git://{repository}/{branch}",
+          "required": false
         }
       ],
       "outputArtifacts": [
@@ -216,67 +259,6 @@
       "currentState": "idle"
     },
     {
-      "id": "node-ai-review",
-      "workflowId": "workflow-feature-development-loop",
-      "type": "ai-review",
-      "name": "AI Review",
-      "guidance": "AI reads the diff and the test report, then either approves (→ Open PR) or flags changes needed (→ Manual Claude Code Edit). Change the Agent field in the sidebar to pick the review backend.",
-      "mode": "auto",
-      "position": { "x": 2080, "y": 120 },
-      "inputArtifacts": [
-        {
-          "name": "implementation-branch",
-          "path": "git://{repository}/{branch}",
-          "required": true
-        },
-        {
-          "name": "test-report",
-          "path": "loopboard://runs/{run}/test-report",
-          "required": true
-        }
-      ],
-      "outputArtifacts": [
-        {
-          "name": "review-notes",
-          "path": "loopboard://runs/{run}/review-notes",
-          "required": true
-        }
-      ],
-      "requireApproval": false,
-      "maxRetries": 0,
-      "riskPolicy": "low",
-      "config": {},
-      "currentState": "idle"
-    },
-    {
-      "id": "node-manual-claude-code-edit",
-      "workflowId": "workflow-feature-development-loop",
-      "type": "manual-claude-code-edit",
-      "name": "Manual Claude Code Edit",
-      "guidance": "AI Review flagged issues that need human attention. Open the review-notes artifact and apply fixes in Claude Code. Approve when the branch is ready to re-test.",
-      "mode": "human",
-      "position": { "x": 2080, "y": 320 },
-      "inputArtifacts": [
-        {
-          "name": "review-notes",
-          "path": "loopboard://runs/{run}/review-notes",
-          "required": true
-        }
-      ],
-      "outputArtifacts": [
-        {
-          "name": "manual-patch",
-          "path": "git://{repository}/{branch}",
-          "required": true
-        }
-      ],
-      "requireApproval": true,
-      "maxRetries": 0,
-      "riskPolicy": "manual-only",
-      "config": { "optional": true },
-      "currentState": "idle"
-    },
-    {
       "id": "node-open-pr",
       "workflowId": "workflow-feature-development-loop",
       "type": "open-pr",
@@ -286,9 +268,14 @@
       "position": { "x": 2340, "y": 120 },
       "inputArtifacts": [
         {
+          "name": "manual-patch",
+          "path": "git://{repository}/{branch}",
+          "required": false
+        },
+        {
           "name": "implementation-branch",
           "path": "git://{repository}/{branch}",
-          "required": true
+          "required": false
         }
       ],
       "outputArtifacts": [
@@ -305,13 +292,41 @@
       "currentState": "idle"
     },
     {
+      "id": "node-pr-review-agent",
+      "workflowId": "workflow-feature-development-loop",
+      "type": "pr-review-agent",
+      "name": "PR Agent",
+      "guidance": "Runs the real PR-Agent against the final PR and publishes the review to GitHub. Findings loop back to Manual Edit; a clean structured review advances to Merge.",
+      "mode": "auto",
+      "position": { "x": 2600, "y": 120 },
+      "inputArtifacts": [
+        {
+          "name": "pull-request",
+          "path": "https://github.com/{repository}/pulls",
+          "required": true
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "name": "review-comments",
+          "path": "loopboard://runs/{run}/review-comments",
+          "required": true
+        }
+      ],
+      "requireApproval": false,
+      "maxRetries": 1,
+      "riskPolicy": "medium",
+      "config": {},
+      "currentState": "idle"
+    },
+    {
       "id": "node-merge",
       "workflowId": "workflow-feature-development-loop",
       "type": "merge",
       "name": "Merge",
       "guidance": "Final human gate. Review the PR, confirm CI is green, then approve here to merge the feature branch into main.",
       "mode": "human",
-      "position": { "x": 2600, "y": 120 },
+      "position": { "x": 2860, "y": 120 },
       "inputArtifacts": [
         {
           "name": "pull-request",
@@ -392,36 +407,11 @@
       "condition": {}
     },
     {
-      "id": "edge-node-agent-orchestrator-implement-to-node-run-tests",
+      "id": "edge-node-agent-orchestrator-implement-to-node-manual-claude-code-edit",
       "workflowId": "workflow-feature-development-loop",
       "sourceNodeId": "node-agent-orchestrator-implement",
-      "targetNodeId": "node-run-tests",
-      "label": "next",
-      "condition": {}
-    },
-    {
-      "id": "edge-node-run-tests-to-node-ai-review",
-      "workflowId": "workflow-feature-development-loop",
-      "sourceNodeId": "node-run-tests",
-      "targetNodeId": "node-ai-review",
-      "label": "next",
-      "condition": {}
-    },
-    {
-      "id": "edge-node-ai-review-to-node-open-pr",
-      "workflowId": "workflow-feature-development-loop",
-      "sourceNodeId": "node-ai-review",
-      "targetNodeId": "node-open-pr",
-      "label": "approved",
-      "condition": {}
-    },
-    {
-      "id": "edge-node-ai-review-to-node-manual-claude-code-edit",
-      "workflowId": "workflow-feature-development-loop",
-      "sourceNodeId": "node-ai-review",
       "targetNodeId": "node-manual-claude-code-edit",
-      "label": "needs changes",
-      "dashed": true,
+      "label": "next",
       "condition": {}
     },
     {
@@ -429,16 +419,49 @@
       "workflowId": "workflow-feature-development-loop",
       "sourceNodeId": "node-manual-claude-code-edit",
       "targetNodeId": "node-run-tests",
-      "label": "retry",
+      "label": "next",
+      "condition": {}
+    },
+    {
+      "id": "edge-node-run-tests-to-node-open-pr",
+      "workflowId": "workflow-feature-development-loop",
+      "sourceNodeId": "node-run-tests",
+      "targetNodeId": "node-open-pr",
+      "label": "passed",
+      "condition": {}
+    },
+    {
+      "id": "edge-node-run-tests-to-node-manual-claude-code-edit",
+      "workflowId": "workflow-feature-development-loop",
+      "sourceNodeId": "node-run-tests",
+      "targetNodeId": "node-manual-claude-code-edit",
+      "label": "failed",
       "dashed": true,
       "condition": {}
     },
     {
-      "id": "edge-node-open-pr-to-node-merge",
+      "id": "edge-node-open-pr-to-node-pr-review-agent",
       "workflowId": "workflow-feature-development-loop",
       "sourceNodeId": "node-open-pr",
-      "targetNodeId": "node-merge",
+      "targetNodeId": "node-pr-review-agent",
       "label": "next",
+      "condition": {}
+    },
+    {
+      "id": "edge-node-pr-review-agent-to-node-merge",
+      "workflowId": "workflow-feature-development-loop",
+      "sourceNodeId": "node-pr-review-agent",
+      "targetNodeId": "node-merge",
+      "label": "approved",
+      "condition": {}
+    },
+    {
+      "id": "edge-node-pr-review-agent-to-node-manual-claude-code-edit",
+      "workflowId": "workflow-feature-development-loop",
+      "sourceNodeId": "node-pr-review-agent",
+      "targetNodeId": "node-manual-claude-code-edit",
+      "label": "needs changes",
+      "dashed": true,
       "condition": {}
     }
   ],

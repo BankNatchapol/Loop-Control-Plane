@@ -29,6 +29,8 @@ export const ENGINE_DELEGATED_WORKFLOW_NODE_TYPES = [
   "open-pr",
   "run-tests",
   "ai-review",
+  "pr-review-agent",
+  "merge",
 ] as const;
 
 export type EngineDelegatedWorkflowNodeType =

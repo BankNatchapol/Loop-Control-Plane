@@ -37,4 +37,5 @@ export const startSchedulerBackgroundTicks = (
       }
     })();
   }, intervalMs);
+  activeInterval.unref();
 };

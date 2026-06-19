@@ -136,12 +136,37 @@ export const executeRunTests = async (
   );
 
   if (!processResult.success) {
+    if (!processResult.timedOut && processResult.exitCode !== null) {
+      return {
+        success: true,
+        branchLabel: "failed",
+        outputArtifacts: [resolvedArtifact],
+        result: {
+          workflowRunId: input.workflowRunId,
+          branchLabel: "failed",
+          testReportPath: resolvedArtifact.path,
+          testReportSummary,
+          exitCode: processResult.exitCode,
+          timedOut: false,
+          passed: false,
+        },
+        logs: [
+          ...logs,
+          logEntry("info", "Test failures will route back to manual editing.", {
+            testReportPath: resolvedArtifact.path,
+          }),
+        ],
+      };
+    }
+
     return {
       success: false,
-      errorCode: processResult.timedOut ? "run_tests_timeout" : "run_tests_failed",
+      errorCode: processResult.timedOut
+        ? "run_tests_timeout"
+        : "run_tests_infrastructure_failed",
       error: processResult.timedOut
         ? "Project test command timed out."
-        : `Project test command exited with code ${processResult.exitCode ?? "unknown"}.`,
+        : "Project test command failed before returning an exit code.",
       outputArtifacts: [resolvedArtifact],
       result: {
         workflowRunId: input.workflowRunId,
@@ -157,9 +182,11 @@ export const executeRunTests = async (
 
   return {
     success: true,
+    branchLabel: "passed",
     outputArtifacts: [resolvedArtifact],
     result: {
       workflowRunId: input.workflowRunId,
+      branchLabel: "passed",
       testReportPath: resolvedArtifact.path,
       testReportSummary,
       exitCode: processResult.exitCode,

@@ -45,7 +45,7 @@ export const loopBoardGitHubLabels: GitHubLabelDefinition[] = [
   {
     name: "loopboard",
     color: "475569",
-    description: "Created or managed through LoopBoard.",
+    description: "Created or managed through Loop Control Plane.",
   },
   {
     name: "ao-ready",
@@ -152,7 +152,7 @@ export const checkGitHubConnection = async ({
         headers: {
           Accept: "application/vnd.github+json",
           Authorization: `Bearer ${token}`,
-          "User-Agent": "LoopBoard",
+          "User-Agent": "Loop Control Plane",
           "X-GitHub-Api-Version": "2022-11-28",
         },
       },
@@ -199,7 +199,7 @@ const githubApiHeaders = (token: string) => ({
   Accept: "application/vnd.github+json",
   Authorization: `Bearer ${token}`,
   "Content-Type": "application/json",
-  "User-Agent": "LoopBoard",
+  "User-Agent": "Loop Control Plane",
   "X-GitHub-Api-Version": "2022-11-28",
 });
 

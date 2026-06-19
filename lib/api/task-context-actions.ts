@@ -183,7 +183,7 @@ export const syncExistingTaskEventsFile = (task: PersistedTask): void => {
   try {
     service.syncExistingEventsFile(task);
   } catch (error) {
-    console.error(`LoopBoard could not refresh events.jsonl for ${task.id}.`, error);
+    console.error(`Loop Control Plane could not refresh events.jsonl for ${task.id}.`, error);
   }
 };
 
@@ -214,5 +214,5 @@ const getTaskContextInput = (
 const contextActionError = (fileName: string, error: unknown): TaskContextActionError => {
   const reason = error instanceof Error ? error.message : "Unknown file error.";
 
-  return new TaskContextActionError(`LoopBoard could not write ${fileName}: ${reason}`);
+  return new TaskContextActionError(`Loop Control Plane could not write ${fileName}: ${reason}`);
 };

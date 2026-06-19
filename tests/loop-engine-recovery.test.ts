@@ -41,6 +41,7 @@ import { seedProject } from "@/lib/loopboard";
 import type { WorkflowArtifact } from "@/lib/loopboard";
 import {
   resumeWorkflowRunFromEngine,
+  runNextWorkflowStep,
   startWorkflowRun,
 } from "@/lib/workflows/workflow-runner";
 
@@ -96,6 +97,69 @@ const createFailedDemoJob = (repository: LoopBoardRepository): string => {
 };
 
 describe("loop-engine-recovery", () => {
+  it("marks orphaned running work interrupted and resumes with a new attempt", () =>
+    withRepository(async (repository) => {
+      const workflow = repository.createWorkflow({
+        id: "workflow-interruption-recovery",
+        projectId: seedProject.id,
+        name: "Interruption recovery",
+        nodes: [
+          {
+            id: "node-import",
+            type: "import-tasks",
+            name: "Import",
+            mode: "auto",
+            position: { x: 0, y: 0 },
+            inputArtifacts: [],
+            outputArtifacts: [
+              {
+                name: "loopboard-tasks",
+                path: "loopboard://feature/{feature}/tasks",
+                required: true,
+              },
+            ],
+            requireApproval: false,
+            maxRetries: 2,
+            riskPolicy: "low",
+            config: {},
+            currentState: "idle",
+          },
+        ],
+        edges: [],
+      });
+      repository.updateAutomationSettings({ globalAutoRunEnabled: true });
+      const run = startWorkflowRun({
+        repository,
+        input: { workflowId: workflow.id },
+      });
+      const running = runNextWorkflowStep({ repository, runId: run.id });
+      assert.equal(running.steps[0]?.status, "running");
+
+      const interrupted = repository.interruptOrphanedExecutions("test restart");
+      assert.equal(interrupted.runs, 1);
+      assert.equal(interrupted.jobs, 1);
+      assert.equal(repository.getWorkflowRun(run.id).status, "interrupted");
+      assert.equal(
+        repository
+          .listEngineJobs({ workflowRunId: run.id })
+          .at(-1)?.status,
+        "interrupted",
+      );
+      assert.equal(
+        repository.getWorkflowRun(run.id).steps[0]?.status,
+        "interrupted",
+      );
+
+      const resumed = await resumeWorkflowRunFromEngine({
+        repository,
+        runId: run.id,
+      });
+      assert.equal(resumed.status, "running");
+      assert.equal(resumed.steps.length, 2);
+      assert.equal(resumed.steps[0]?.status, "interrupted");
+      assert.equal(resumed.steps[1]?.attempt, 2);
+    }));
+
   it("requeues failed jobs when under maxAttempts and policy allows", () =>
     withRepository((repository) => {
       const jobId = createFailedDemoJob(repository);

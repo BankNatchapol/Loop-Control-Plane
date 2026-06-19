@@ -113,12 +113,16 @@ export const maybeAutoAdvanceWorkflowRun = (
       workflowRunId,
       pauseReason: extractWorkflowRunPauseReason(
         run,
-        repository.getWorkflow(run.workflowId),
+        run.workflowSnapshot?.nodes?.length
+          ? run.workflowSnapshot
+          : repository.getWorkflow(run.workflowId),
       ),
     };
   }
 
-  const workflow = repository.getWorkflow(run.workflowId);
+  const workflow = run.workflowSnapshot?.nodes?.length
+    ? run.workflowSnapshot
+    : repository.getWorkflow(run.workflowId);
   const currentNodeId = run.currentNodeId;
   const currentNode = currentNodeId
     ? workflow.nodes.find((node) => node.id === currentNodeId)
@@ -216,7 +220,9 @@ export const maybeFollowUpAfterCompletedJob = (
           workflowRunId: job.workflowRunId,
           pauseReason: extractWorkflowRunPauseReason(
             run,
-            repository.getWorkflow(run.workflowId),
+            run.workflowSnapshot?.nodes?.length
+              ? run.workflowSnapshot
+              : repository.getWorkflow(run.workflowId),
           ),
         };
       }
@@ -233,7 +239,9 @@ export const maybeFollowUpAfterCompletedJob = (
         workflowRunId: job.workflowRunId,
         pauseReason: extractWorkflowRunPauseReason(
           run,
-          repository.getWorkflow(run.workflowId),
+          run.workflowSnapshot?.nodes?.length
+            ? run.workflowSnapshot
+            : repository.getWorkflow(run.workflowId),
         ),
       };
     }

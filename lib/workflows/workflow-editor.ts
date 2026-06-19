@@ -38,6 +38,10 @@ export const workflowNodeModes: WorkflowNodeMode[] = [
   "auto",
   "human",
   "semi",
+];
+
+const persistedWorkflowNodeModes: WorkflowNodeMode[] = [
+  ...workflowNodeModes,
   "disabled",
 ];
 
@@ -225,7 +229,8 @@ export const workflowNodeCatalog: Array<{
     maxRetries: 2,
     riskPolicy: "medium",
     inputArtifacts: [
-      { name: "implementation-branch", path: "git://{repository}/{branch}", required: true },
+      { name: "manual-patch", path: "git://{repository}/{branch}", required: false },
+      { name: "implementation-branch", path: "git://{repository}/{branch}", required: false },
     ],
     outputArtifacts: [
       { name: "test-report", path: "loopboard://runs/{run}/test-report", required: true },
@@ -249,6 +254,21 @@ export const workflowNodeCatalog: Array<{
     config: catalogNodeConfig("ai-review"),
   },
   {
+    type: "pr-review-agent",
+    name: "PR Agent",
+    mode: "auto",
+    requireApproval: false,
+    maxRetries: 1,
+    riskPolicy: "medium",
+    inputArtifacts: [
+      { name: "pull-request", path: "https://github.com/{repository}/pulls", required: true },
+    ],
+    outputArtifacts: [
+      { name: "review-comments", path: "loopboard://runs/{run}/review-comments", required: true },
+    ],
+    config: catalogNodeConfig("pr-review-agent"),
+  },
+  {
     type: "open-pr",
     name: "Open PR",
     mode: "semi",
@@ -256,7 +276,8 @@ export const workflowNodeCatalog: Array<{
     maxRetries: 1,
     riskPolicy: "medium",
     inputArtifacts: [
-      { name: "implementation-branch", path: "git://{repository}/{branch}", required: true },
+      { name: "manual-patch", path: "git://{repository}/{branch}", required: false },
+      { name: "implementation-branch", path: "git://{repository}/{branch}", required: false },
     ],
     outputArtifacts: [
       { name: "pull-request", path: "https://github.com/{repository}/pulls", required: true },
@@ -286,27 +307,14 @@ export const workflowNodeCatalog: Array<{
     maxRetries: 0,
     riskPolicy: "manual-only",
     inputArtifacts: [
-      { name: "review-notes", path: "loopboard://runs/{run}/review-notes", required: true },
+      { name: "implementation-branch", path: "git://{repository}/{branch}", required: false },
+      { name: "test-report", path: "loopboard://runs/{run}/test-report", required: false },
+      { name: "review-comments", path: "loopboard://runs/{run}/review-comments", required: false },
     ],
     outputArtifacts: [
       { name: "manual-patch", path: "git://{repository}/{branch}", required: true },
     ],
     config: { optional: true },
-  },
-  {
-    type: "pr-review-agent",
-    name: "PR Review",
-    mode: "auto",
-    requireApproval: false,
-    maxRetries: 1,
-    riskPolicy: "medium",
-    inputArtifacts: [
-      { name: "pull-request", path: "https://github.com/{repository}/pulls", required: true },
-    ],
-    outputArtifacts: [
-      { name: "review-comments", path: "loopboard://runs/{run}/review-comments", required: true },
-    ],
-    config: catalogNodeConfig("pr-review-agent"),
   },
 ];
 
@@ -365,7 +373,7 @@ export const validateWorkflowDefinition = (
     }
     nodeIds.add(node.id);
 
-    if (!workflowNodeModes.includes(node.mode)) {
+    if (!persistedWorkflowNodeModes.includes(node.mode)) {
       issues.push({
         code: "invalid-node-mode",
         message: `Node "${node.name}" uses unsupported mode "${node.mode}".`,
@@ -500,3 +508,63 @@ export const normalizeWorkflowEdge = ({
   ...(dashed ? { dashed: true } : {}),
   condition: {},
 });
+
+const OPTIONAL_EDGE_LABEL = /\b(needs|retry|optional|loop|fail|reject|back)\b/i;
+
+export const applyWorkflowEdgeDisplayDefaults = (
+  edges: WorkflowEdge[],
+): WorkflowEdge[] => {
+  const bySource = new Map<string, WorkflowEdge[]>();
+
+  for (const edge of edges) {
+    const siblings = bySource.get(edge.sourceNodeId) ?? [];
+    siblings.push(edge);
+    bySource.set(edge.sourceNodeId, siblings);
+  }
+
+  const dashedById = new Map<string, boolean>();
+
+  for (const siblings of bySource.values()) {
+    // A single outgoing path is always the main flow. This also promotes an
+    // optional/dashed branch when its solid sibling is deleted.
+    if (siblings.length === 1) {
+      dashedById.set(siblings[0]!.id, false);
+      continue;
+    }
+
+    if (siblings.length !== 2) {
+      continue;
+    }
+
+    const explicitDashed = siblings.filter((edge) => edge.dashed === true);
+    if (explicitDashed.length === 1) {
+      dashedById.set(explicitDashed[0]!.id, true);
+      dashedById.set(siblings.find((edge) => edge.id !== explicitDashed[0]!.id)!.id, false);
+      continue;
+    }
+    if (explicitDashed.length === 2) {
+      continue;
+    }
+
+    const hinted = siblings.filter((edge) => OPTIONAL_EDGE_LABEL.test(edge.label));
+    if (hinted.length === 1) {
+      dashedById.set(hinted[0]!.id, true);
+      dashedById.set(siblings.find((edge) => edge.id !== hinted[0]!.id)!.id, false);
+      continue;
+    }
+
+    const sorted = [...siblings].sort((left, right) =>
+      left.targetNodeId.localeCompare(right.targetNodeId),
+    );
+    dashedById.set(sorted[0]!.id, false);
+    dashedById.set(sorted[1]!.id, true);
+  }
+
+  return edges.map((edge) => {
+    const inferred = dashedById.get(edge.id);
+    if (inferred === undefined) {
+      return edge;
+    }
+    return inferred ? { ...edge, dashed: true } : { ...edge, dashed: undefined };
+  });
+};

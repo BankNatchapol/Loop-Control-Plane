@@ -137,7 +137,7 @@ async function executeEngineJob(
 
   if (result.logs && result.logs.length > 0) {
     for (const log of (result.logs as Array<{ level: string; message: string }>).slice(-8)) {
-      console.log(`      [${log.level}] ${log.message.slice(0, 110)}`);
+      console.log(`      [${log.level}] ${log.message.slice(0, 200)}`);
     }
   }
 

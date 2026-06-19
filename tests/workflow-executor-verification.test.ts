@@ -189,6 +189,32 @@ const createVerificationExecutorRegistry = (
           return toExecutorResult(stepResult);
         }
 
+        if (payload?.nodeType === "agent-orchestrator-implement") {
+          return {
+            success: true,
+            result: {
+              branchLabel: "next",
+              stdoutSummary:
+                "Mocked AO implement completed for verification walkthrough.",
+              outputArtifacts: [
+                {
+                  name: "implementation-branch",
+                  path: `git://${context.job.projectId}/feature/${context.job.payload.featureId}`,
+                  required: true,
+                },
+              ],
+            },
+            logs: [
+              {
+                timestamp: new Date().toISOString(),
+                level: "info",
+                message:
+                  "Mocked AO implement completed for verification walkthrough.",
+              },
+            ],
+          };
+        }
+
         return dispatchWorkflowStepJob(context, {
           repository,
           processRunner:
@@ -284,8 +310,15 @@ describe("workflow executor verification", () => {
       assert.equal(specKitTick.job?.payload.nodeType, "spec-kit-actions");
 
       const afterSpecKit = repository.getWorkflowRun(run.id);
-      assert.equal(afterSpecKit.currentNodeId, "node-human-review");
+      assert.equal(afterSpecKit.currentNodeId, "node-spec-kit-clarify");
       assert.equal(afterSpecKit.steps.at(-1)?.status, "completed");
+
+      const clarifyPaused = runNextWorkflowStep({ repository, runId: run.id });
+      assert.equal(clarifyPaused.status, "paused");
+      assert.equal(clarifyPaused.currentNodeId, "node-spec-kit-clarify");
+
+      const afterClarify = approveWorkflowRunStep({ repository, runId: run.id });
+      assert.equal(afterClarify.currentNodeId, "node-human-review");
 
       writeFileSync(join(featureFolder, "tasks.md"), FIXTURE_TASKS, "utf8");
 
@@ -359,9 +392,23 @@ describe("workflow executor verification", () => {
       assert.equal(aoPaused.status, "paused");
       assert.equal(aoPaused.currentNodeId, "node-agent-orchestrator-implement");
 
-      const afterAo = approveWorkflowRunStep({ repository, runId: run.id });
-      assert.equal(afterAo.currentNodeId, "node-run-tests");
+      const aoDelegated = approveWorkflowRunStep({ repository, runId: run.id });
+      assert.equal(aoDelegated.currentNodeId, "node-agent-orchestrator-implement");
+      assert.equal(aoDelegated.steps.at(-1)?.status, "running");
+
+      const aoTick = await scheduler.tick({ mode: "manual" });
+      assert.equal(aoTick.job?.status, "completed");
+      assert.equal(aoTick.job?.payload.nodeType, "agent-orchestrator-implement");
+
+      const afterAo = repository.getWorkflowRun(run.id);
+      assert.equal(afterAo.currentNodeId, "node-manual-claude-code-edit");
       assert.equal(afterAo.steps.at(-1)?.status, "completed");
+
+      const manualPaused = runNextWorkflowStep({ repository, runId: run.id });
+      assert.equal(manualPaused.status, "paused");
+      assert.equal(manualPaused.currentNodeId, "node-manual-claude-code-edit");
+      const manualApproved = approveWorkflowRunStep({ repository, runId: run.id });
+      assert.equal(manualApproved.currentNodeId, "node-run-tests");
 
       const testsPaused = runNextWorkflowStep({ repository, runId: run.id });
       assert.equal(testsPaused.status, "paused");
@@ -375,21 +422,7 @@ describe("workflow executor verification", () => {
       assert.equal(testsTick.job?.payload.nodeType, "run-tests");
 
       const afterTests = repository.getWorkflowRun(run.id);
-      assert.equal(afterTests.currentNodeId, "node-ai-review");
-
-      const reviewEnginePaused = runNextWorkflowStep({ repository, runId: run.id });
-      assert.equal(reviewEnginePaused.status, "paused");
-      assert.equal(reviewEnginePaused.currentNodeId, "node-ai-review");
-
-      const reviewEngineDelegated = approveWorkflowRunStep({ repository, runId: run.id });
-      assert.equal(reviewEngineDelegated.steps.at(-1)?.status, "running");
-
-      const aiReviewTick = await scheduler.tick({ mode: "manual" });
-      assert.equal(aiReviewTick.job?.status, "completed");
-      assert.equal(aiReviewTick.job?.payload.nodeType, "ai-review");
-
-      const afterAiReview = repository.getWorkflowRun(run.id);
-      assert.equal(afterAiReview.currentNodeId, "node-open-pr");
+      assert.equal(afterTests.currentNodeId, "node-open-pr");
 
       const openPrPaused = runNextWorkflowStep({ repository, runId: run.id });
       assert.equal(openPrPaused.status, "paused");
@@ -403,13 +436,13 @@ describe("workflow executor verification", () => {
       assert.equal(openPrTick.job?.payload.nodeType, "open-pr");
 
       const afterOpenPr = repository.getWorkflowRun(run.id);
-      assert.equal(afterOpenPr.currentNodeId, "node-merge");
+      assert.equal(afterOpenPr.currentNodeId, "node-pr-review-agent");
       assert.equal(afterOpenPr.steps.at(-1)?.status, "completed");
 
-      const mergePaused = runNextWorkflowStep({ repository, runId: run.id });
-      assert.equal(mergePaused.status, "paused");
-      assert.equal(mergePaused.currentNodeId, "node-merge");
-      assert.equal(mergePaused.steps.at(-1)?.status, "waiting-approval");
+      const prAgentPaused = runNextWorkflowStep({ repository, runId: run.id });
+      assert.equal(prAgentPaused.status, "paused");
+      assert.equal(prAgentPaused.currentNodeId, "node-pr-review-agent");
+      assert.equal(prAgentPaused.steps.at(-1)?.status, "waiting-approval");
 
       const completedEvents = repository.getFeature(featureId).events;
       assert.ok(
